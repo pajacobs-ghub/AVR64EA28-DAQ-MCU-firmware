@@ -7,7 +7,7 @@
 // 2023-11-21 Add the basic command interpreter and let it run the show.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.1 2023-11-21"
+#define VERSION_STR "v0.2 2023-11-21"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -31,17 +31,70 @@ char str_buf[NSTRBUF];
 #define NCMDBUF 64
 char cmd_buf[NCMDBUF];
 
+// Bit patterns for selecting analog-input pins.
+const uint8_t muxpos_pin[] = {
+    ADC_MUXPOS_AIN28_gc, // [0] = PC0
+    ADC_MUXPOS_AIN29_gc, // [1] = PC1
+    ADC_MUXPOS_AIN30_gc, // [2] = PC2
+    ADC_MUXPOS_AIN31_gc, // [3] = PC3
+    ADC_MUXPOS_AIN0_gc,  // [4] = PD0
+    ADC_MUXPOS_AIN1_gc,  // [5] = PD1
+    ADC_MUXPOS_AIN2_gc,  // [6] = PD2
+    ADC_MUXPOS_AIN3_gc,  // [7] = PD3
+    ADC_MUXPOS_AIN4_gc,  // [8] = PD4
+    ADC_MUXPOS_AIN5_gc,  // [9] = PD5
+    ADC_MUXPOS_AIN6_gc,  // [10] = PD6
+    ADC_MUXPOS_AIN7_gc,  // [11] = PD7
+    ADC_MUXPOS_GND_gc,   // [12] = GND
+};
+const uint8_t muxneg_pin[] = {
+    ADC_MUXNEG_AIN28_gc, // [0] = PC0
+    ADC_MUXNEG_AIN29_gc, // [1] = PC1
+    ADC_MUXNEG_AIN30_gc, // [2] = PC2
+    ADC_MUXNEG_AIN31_gc, // [3] = PC3
+    ADC_MUXNEG_AIN0_gc,  // [4] = PD0
+    ADC_MUXNEG_AIN1_gc,  // [5] = PD1
+    ADC_MUXNEG_AIN2_gc,  // [6] = PD2
+    ADC_MUXNEG_AIN3_gc,  // [7] = PD3
+    ADC_MUXNEG_AIN4_gc,  // [8] = PD4
+    ADC_MUXNEG_AIN5_gc,  // [9] = PD5
+    ADC_MUXNEG_AIN6_gc,  // [10] = PD6
+    ADC_MUXNEG_AIN7_gc,  // [11] = PD7
+    ADC_MUXNEG_GND_gc,   // [12] = GND
+};
+
+#define MAXNCHAN 6
+#define MAXNSAMP 256
+int16_t data[MAXNCHAN][MAXNSAMP];
+
 // Parameters controlling the device are stored in virtual registers.
-#define NUMREG 4
+#define NUMREG 22
 int16_t vregister[NUMREG]; // working copy in SRAM
 
 void set_registers_to_original_values()
 {
-    vregister[0] = 1;   // trigger mode
-    vregister[1] = 100; // trigger level 1 as a 11-bit count, 0-2048
-    vregister[2] = 0;   // sample period in timer ticks 
-    vregister[3] = 0;   // number of channels to sample
-    // [TODO] up to 12 registers to set MUXPOS and MUXNEG values
+    vregister[0] = 1250; // sample period in timer ticks 
+    vregister[1] = 6;    // number of channels to sample
+    vregister[2] = 256;  // number of samples in record
+    vregister[3] = 1;    // trigger mode 0=immediate, 1=internal, 2=external
+    vregister[4] = 0;    // trigger channel for internal trigger
+    vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
+    vregister[6] = 128;  // number of samples to collect after trigger event
+    vregister[7] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
+    vregister[8] = 0;    // PGA gain 0=8X
+    vregister[9] = 0;    // V_REF 0=1.024V
+    vregister[10] = muxpos_pin[0];  // CH0+ = PC0 by default
+    vregister[11] = muxneg_pin[1];  // CH0- = PC1 by default
+    vregister[12] = muxpos_pin[2];  // CH1+ = PC2 by default
+    vregister[13] = muxneg_pin[3];  // CH1- = PC3 by default
+    vregister[14] = muxpos_pin[4];  // CH2+ = PD0 by default
+    vregister[15] = muxneg_pin[5];  // CH2- = PD1 by default
+    vregister[16] = muxpos_pin[6];  // CH3+ = PD2 by default
+    vregister[17] = muxneg_pin[7];  // CH3- = PD3 by default
+    vregister[18] = muxpos_pin[8];  // CH4+ = PD4 by default
+    vregister[19] = muxneg_pin[9];  // CH4- = PD5 by default
+    vregister[20] = muxpos_pin[10]; // CH5+ = PD6 by default
+    vregister[21] = muxneg_pin[11]; // CH5- = PD7 by default
 }
 
 // [TODO] EEPROM data should start off like the original values above.
@@ -84,37 +137,56 @@ void adc0_init(void)
 
 
 void sample_channels(void)
-// As a demonstration, sample the analog channels periodically.
+// As a demonstration, sample the analog channels periodically
+// and report values.
 {
-    int count = 0;
-    int16_t res0, res1;
+    uint16_t ticks = (uint16_t)vregister[0];
+    uint8_t n_chan = (uint8_t)vregister[1];
+    uint16_t n_sample = (uint16_t)vregister[2];
+    int16_t res[MAXNCHAN];
     int nchar;
+    uint8_t via_bits;
+    if (vregister[7]) {
+        via_bits = ADC_VIA_PGA_gc;
+    } else {
+        via_bits = ADC_VIA_DIRECT_gc;
+    }
+    uint8_t muxpos_bits[6], muxneg_bits[6];
+    for (uint8_t ch=0; ch < n_chan; ch++) {
+        muxpos_bits[ch] = via_bits | (uint8_t)vregister[10+2*ch];
+        muxneg_bits[ch] = via_bits | (uint8_t)vregister[11+2*ch];
+    }
     //
     adc0_init();
-    timerA0_init(9765); // 9765*51.2us = 500ms
+    timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
-    while (count < 10) {
-        count++;
-        // Select ADC channel and make the conversion.
+    for (uint16_t i = 0; i < n_sample; i++) {
         PORTF.OUTSET = PIN0_bm;
-        ADC0.MUXPOS = ADC_VIA_PGA_gc | ADC_MUXPOS_AIN28_gc; // PC0
-        ADC0.MUXNEG = ADC_VIA_PGA_gc | ADC_MUXPOS_AIN29_gc; // PC1
-        ADC0.COMMAND = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
-        while (!(ADC0.INTFLAGS & ADC_SAMPRDY_bm)) { /* wait */ }
-        res0 = ADC0.SAMPLE; // 16-bit value
-        ADC0.MUXPOS = ADC_VIA_PGA_gc | ADC_MUXPOS_AIN30_gc; // PC2
-        ADC0.MUXNEG = ADC_VIA_PGA_gc | ADC_MUXPOS_AIN31_gc; // PC3
-        ADC0.COMMAND = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
-        while (!(ADC0.INTFLAGS & ADC_SAMPRDY_bm)) { /* wait */ }
-        res1 = ADC0.SAMPLE; // 16-bit value
+        for (uint8_t ch=0; ch < n_chan; ch++) {
+            // Select ADC channel and make the conversion.
+            ADC0.MUXPOS = muxpos_bits[ch];
+            ADC0.MUXNEG = muxneg_bits[ch];
+            ADC0.COMMAND = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
+            while (!(ADC0.INTFLAGS & ADC_SAMPRDY_bm)) { /* wait */ }
+            res[ch] = ADC0.SAMPLE; // 16-bit value
+        }
+        // Save the sample for later.
+        // Eventually, we want to save to external SPI RAM chips.
+        for (uint8_t ch=0; ch < n_chan; ch++) {
+            data[ch][i] = res[ch];
+        }
         PORTF.OUTCLR = PIN0_bm;
-        //
-        nchar = snprintf(str_buf, NSTRBUF, "\r\ncount=%d res0=%d res1=%d",
-                         count, res0, res1);
-        usart0_putstr(str_buf);
         timerA0_wait();
     } 
     timerA0_close();
+    //
+    // After all of the collection report the values.
+    for (uint16_t i = 0; i < n_sample; i++) {
+        nchar = snprintf(str_buf, NSTRBUF, "\r\ncount=%6d %6d %6d %6d %6d %6d %6d",
+                         i, data[0][i], data[1][i], data[2][i],
+                         data[3][i], data[4][i], data[5][i]);
+        usart0_putstr(str_buf);
+    }
 } // end void sample_channels()
 
 
@@ -250,11 +322,28 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\n c <i>  convert analogue channel i"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\nRegisters:"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 0  mode: 1= sample channels and report"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n          2= sample channels, recording data"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 1  trigger level a as a 11-bit count, 0-2047"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  sample period in timer ticks"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  number of channels to sample"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 0  sample period in timer ticks (0.8us ticks)"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 1  number of channels to sample"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples in record"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  trigger mode 0=immediate, 1=internal, 2=external"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 4  trigger channel for internal trigger"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 5  trigger level as an 11-bit count, 0-2047"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  number of samples to collect after trigger event"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 7  PGA flag for all channels, 0=direct 1=via_PGA"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 8  PGA gain 0=8X"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 9  V_REF 0=1.024V"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 10 CH0+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 11 CH0-"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 12 CH1+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 13 CH1-"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 14 CH2+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 15 CH2-"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 16 CH3+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 17 CH3-"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 18 CH4+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 19 CH4-"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 20 CH5+"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 21 CH5-"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\nok"); usart0_putstr(str_buf);
             break;
         default:
