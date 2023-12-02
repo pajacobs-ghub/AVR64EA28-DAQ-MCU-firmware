@@ -13,6 +13,7 @@
 #include "usart.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 void usart0_init(long baud)
 {
