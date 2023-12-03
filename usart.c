@@ -5,6 +5,11 @@
 // by Alexandru Niculae
 // Getting Started with Universal Synchronous and Asynchronous
 // Receiver and Transmitter.
+//
+// Pin Assignments
+// 0.TXD == PA0
+// 0.RXD == PA1
+//
 // PJ,
 // 2023-11-19 Initial cut looks like the functions that we use for PIC MCUs.
 
@@ -29,8 +34,6 @@ void usart0_init(long baud)
     // Default pin locations for USART0
     // PA0 = 0.TXD
     // PA1 = 0.RXD
-    PORTA.DIRSET = PIN0_bm;
-    PORTA.DIRCLR = PIN1_bm;
     return;
 }
 

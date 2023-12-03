@@ -5,9 +5,10 @@
 // PJ
 // 2023-11-21 First cut adapted from the peripheral demo codes.
 // 2023-11-21 Add the basic command interpreter and let it run the show.
+// 2023-12-03 Make use of external memory for sample storage.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.4 2023-12-02"
+#define VERSION_STR "v0.5 2023-12-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -15,6 +16,7 @@
 #include <util/delay.h>
 #include "usart.h"
 #include "timerA-free-run.h"
+#include "spi_sram.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -33,6 +35,8 @@ char str_buf[NSTRBUF];
 // Be careful, overruns are not handled well.
 #define NCMDBUF 64
 char cmd_buf[NCMDBUF];
+
+#define MAXNCHAN 12
 
 // Bit patterns for selecting analog-input pins.
 const uint8_t muxpos_pin[] = {
@@ -65,10 +69,6 @@ const uint8_t muxneg_pin[] = {
     ADC_MUXNEG_AIN7_gc,  // [11] = PD7 (actually decimal 7)
     ADC_MUXNEG_GND_gc,   // [12] = GND (actually 0x30)
 };
-
-#define MAXNCHAN 12
-#define MAXNSAMP 128
-int16_t data[MAXNCHAN][MAXNSAMP];
 
 // Parameters controlling the device are stored in virtual registers.
 #define NUMREG 34
@@ -172,15 +172,36 @@ char restore_registers_from_EEPROM()
 
 void iopins_init(void)
 {
+    // UART0
+    PORTA.DIRSET = PIN0_bm; // 0.TX
+    PORTA.DIRCLR = PIN1_bm; // 0.RX
+    //
+    // SPI connection to external SRAM chip
     PORTA.DIRSET = PIN7_bm; // Set PA7 to output for SPI CS_A#
     PORTA.OUTSET = PIN7_bm; // CS_A# high
-    
-    PORTF.DIRSET = PIN0_bm; // Use PF0 to indicate the time for ADC conversion.
+    PORTA.DIRSET = PIN4_bm; // 0.MOSI
+    PORTA.DIRSET = PIN6_bm; // 0.SCK
+    PORTA.DIRCLR = PIN5_bm; // 0.MISO
+    //
+    // Use PF0 to indicate the time for ADC conversion.
+    PORTF.DIRSET = PIN0_bm;
     PORTF.OUTCLR = PIN0_bm;
+    //
+    // 12 analog-in pins
     PORTC.DIRCLR = PIN0_bm; // Input for AIN28
     PORTC.DIRCLR = PIN1_bm; // Input for AIN29
     PORTC.DIRCLR = PIN2_bm; // Input for AIN30
     PORTC.DIRCLR = PIN3_bm; // Input for AIN31
+    PORTD.DIRCLR = PIN0_bm; // Input for AIN0
+    PORTD.DIRCLR = PIN1_bm; // Input for AIN1
+    PORTD.DIRCLR = PIN2_bm; // Input for AIN2
+    PORTD.DIRCLR = PIN3_bm; // Input for AIN3
+    PORTD.DIRCLR = PIN4_bm; // Input for AIN4
+    PORTD.DIRCLR = PIN5_bm; // Input for AIN5
+    PORTD.DIRCLR = PIN6_bm; // Input for AIN6
+    PORTD.DIRCLR = PIN7_bm; // Input for AIN7
+    //
+    return;
 } // end iopins_init()
 
 
@@ -196,6 +217,28 @@ void adc0_init(void)
     while (ADC0.STATUS & ADC_ADCBUSY_bm) { /* wait for settling */ }
 } // end adc0_init()
 
+uint8_t byte_addr_increment(uint8_t n_chan)
+{
+    // We choose an increment such that wrap-around within the 23LC1024 chip
+    // keeps the sample sets aligned.
+    switch (n_chan) {
+        case 0: return 2;
+        case 1: return 2;
+        case 2: return 4;
+        case 3: return 8;
+        case 4: return 8;
+        case 5: return 16;
+        case 6: return 16;
+        case 7: return 16;
+        case 8: return 16;
+        case 9: return 32;
+        case 10: return 32;
+        case 11: return 32;
+        case 12: return 32;
+        default: return 32;
+    }
+    return 32;
+}
 
 void sample_channels(void)
 // As a demonstration, sample the analog channels periodically
@@ -205,6 +248,8 @@ void sample_channels(void)
     uint8_t n_chan = (uint8_t)vregister[1];
     uint16_t n_sample = (uint16_t)vregister[2];
     int16_t res[MAXNCHAN];
+    uint32_t byte_addr_in_SRAM = 0;
+    uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     int nchar;
     uint8_t via_bits;
     if (vregister[7]) {
@@ -232,21 +277,24 @@ void sample_channels(void)
             res[ch] = ADC0.SAMPLE; // 16-bit value
         }
         // Save the sample for later.
-        // Eventually, we want to save to external SPI RAM chips.
-        for (uint8_t ch=0; ch < n_chan; ch++) {
-            data[ch][i] = res[ch];
-        }
+        spi0_send_sample_data(res, n_chan, byte_addr_in_SRAM);
+        byte_addr_in_SRAM += byte_addr_incr;
+        byte_addr_in_SRAM &= 0x0001FFFFUL; // 128kB range
         PORTF.OUTCLR = PIN0_bm;
         timerA0_wait();
     } 
     timerA0_close();
     //
     // After all of the collection report the values.
+    byte_addr_in_SRAM = 0;
     for (uint16_t i = 0; i < n_sample; i++) {
+        spi0_fetch_sample_data(res, n_chan, byte_addr_in_SRAM);
+        // [TODO] need to assemble a string based on value of n_chan.
         nchar = snprintf(str_buf, NSTRBUF, "\r\ncount=%6d %6d %6d %6d %6d %6d %6d",
-                         i, data[0][i], data[1][i], data[2][i],
-                         data[3][i], data[4][i], data[5][i]);
+                         i, res[0], res[1], res[2], res[3], res[4], res[5]);
         usart0_putstr(str_buf);
+        byte_addr_in_SRAM += byte_addr_incr;
+        byte_addr_in_SRAM &= 0x0001FFFFUL; // 128kB range
     }
 } // end void sample_channels()
 
@@ -424,6 +472,7 @@ int main(void)
     iopins_init();
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
     usart0_init(460800);
+    spi0_init();
     //
     nchar = snprintf(str_buf, NSTRBUF, "\r\nAVR64EA28 DAQ-MCU\r\n%s", VERSION_STR);
     usart0_putstr(str_buf);
@@ -441,6 +490,7 @@ int main(void)
             usart0_putstr(str_buf);
         }
     } // never-ending while
+    spi0_close();
     usart0_close();
     return 0;
 }
