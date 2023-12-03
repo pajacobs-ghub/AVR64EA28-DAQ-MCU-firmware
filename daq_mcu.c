@@ -6,9 +6,10 @@
 // 2023-11-21 First cut adapted from the peripheral demo codes.
 // 2023-11-21 Add the basic command interpreter and let it run the show.
 // 2023-12-03 Make use of external memory for sample storage.
+// 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.5 2023-12-03"
+#define VERSION_STR "v0.6 2023-12-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -17,6 +18,7 @@
 #include "usart.h"
 #include "timerA-free-run.h"
 #include "spi_sram.h"
+#include "eeprom.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -70,7 +72,7 @@ const uint8_t muxneg_pin[] = {
     ADC_MUXNEG_GND_gc,   // [12] = GND (actually 0x30)
 };
 
-// Parameters controlling the device are stored in virtual registers.
+// Parameters controlling the device are stored in virtual config registers.
 #define NUMREG 34
 int16_t vregister[NUMREG]; // working copy in SRAM
 
@@ -160,14 +162,19 @@ void set_registers_to_original_values()
 
 // [TODO] EEPROM data should start off like the original values above.
 
-char save_registers_to_EEPROM()
+void save_registers_to_EEPROM()
 {
-    return 1; // [TODO] HEFLASH_writeBlock(0, (void*)vregister, NUMREG*2);
+    for (int i=0; i < NUMREG; i++) {
+        eeprom_write_byte(2*i, (uint8_t)(vregister[i] & 0x00ff));
+        eeprom_write_byte(2*i+1, (uint8_t)((vregister[i] & 0xff00) >> 8));
+    }
 }
 
-char restore_registers_from_EEPROM()
+void restore_registers_from_EEPROM()
 {
-    return 1; // [TODO] HEFLASH_readBlock((void*)vregister, 0, NUMREG*2);
+    for (int i=0; i < NUMREG; i++) {
+        vregister[i] = (int16_t)eeprom_read_byte(2*i) | ((int16_t)eeprom_read_byte(2*i+1) << 8);
+    }
 }
 
 void iopins_init(void)
@@ -373,19 +380,13 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'R':
-            if (restore_registers_from_EEPROM()) {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
-            } else {
-                nchar = snprintf(str_buf, NSTRBUF, "ok");
-            }
+            restore_registers_from_EEPROM();
+            nchar = snprintf(str_buf, NSTRBUF, "ok");
             usart0_putstr(str_buf);
             break;
         case 'S':
-            if (save_registers_to_EEPROM()) {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
-            } else {
-                nchar = snprintf(str_buf, NSTRBUF, "ok");
-            }
+            save_registers_to_EEPROM();
+            nchar = snprintf(str_buf, NSTRBUF, "ok");
             usart0_putstr(str_buf);
             break;
         case 'F':
@@ -476,6 +477,8 @@ int main(void)
     //
     nchar = snprintf(str_buf, NSTRBUF, "\r\nAVR64EA28 DAQ-MCU\r\n%s", VERSION_STR);
     usart0_putstr(str_buf);
+    //
+    restore_registers_from_EEPROM();
     //
     // The basic behaviour is to be forever checking for a text command.
     nchar = snprintf(str_buf, NSTRBUF, "\r\ncmd> ");
