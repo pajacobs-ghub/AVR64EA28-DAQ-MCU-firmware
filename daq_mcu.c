@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.8 2023-12-04"
+#define VERSION_STR "v0.9 2023-12-04"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -42,7 +42,7 @@ char cmd_buf[NCMDBUF];
 int16_t res[MAXNCHAN];
 
 // State of play is indicated by these flags.
-uint32_t byte_addr_in_SRAM;
+uint32_t next_byte_addr_in_SRAM;
 uint8_t busy_n;
 uint8_t event_n;
 
@@ -169,7 +169,7 @@ void set_registers_to_original_values()
     vregister[0] = 1250; // sample period in timer ticks 
     vregister[1] = 6;    // number of channels to sample
     vregister[2] = 128;  // number of samples in record
-    vregister[3] = 1;    // trigger mode 0=immediate, 1=internal, 2=external
+    vregister[3] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
     vregister[4] = 0;    // trigger channel for internal trigger
     vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
     vregister[6] = 128;  // number of samples to collect after trigger event
@@ -313,6 +313,19 @@ uint8_t byte_addr_increment(uint8_t n_chan)
 
 void sample_channels(void)
 // Sample the analog channels periodically and store the data in external SRAM.
+// 
+// For mode=0, we will consider that the trigger event is immediate, at sample 0,
+// and the record will stop after a specified number of samples.
+// So long as the record does not wrap around, the oldest sample set will start at
+// byte address 0.
+//
+// For mode=1 or 2, we will start sampling into the external SRAM 
+// for an indefinite number of samples, while waiting for the trigger event.
+// Once the trigger event happens, we will continue the record for a specified
+// number of samples.  Because we do not keep a record of the number of times 
+// that the SRAM address wraps around, we just assume that the oldest sample
+// starts at the next byte address to be used to store a sample.
+//
 {
     // Get configuration data from virtual registers.
     uint16_t ticks = (uint16_t)vregister[0];
@@ -338,7 +351,7 @@ void sample_channels(void)
     }
     //
     adc0_init();
-    byte_addr_in_SRAM = 0;
+    next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
     uint8_t post_event = 0;
     uint16_t samples_remaining;
     if (mode == MODE_IMMEDIATE) {
@@ -360,10 +373,10 @@ void sample_channels(void)
             res[ch] = ADC0.SAMPLE; // 16-bit value
         }
         // Save the sample for later.
-        spi0_send_sample_data(res, n_chan, byte_addr_in_SRAM);
+        spi0_send_sample_data(res, n_chan, next_byte_addr_in_SRAM);
         // Point to the next available SRAM address.
-        byte_addr_in_SRAM += byte_addr_incr;
-        byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
+        next_byte_addr_in_SRAM += byte_addr_incr;
+        next_byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
         sampling_LED_OFF();
         //
         if (post_event) {
@@ -378,23 +391,41 @@ void sample_channels(void)
     adc0_close();
 } // end void sample_channels()
 
+#define NSTRBUF1 128
+char str_buf1[NSTRBUF1];
+#define NSTRBUF2 16
+char str_buf2[NSTRBUF2];
+
+char* sample_set_to_str(uint16_t n)
+{
+    int nchar;
+    uint8_t n_chan = (uint8_t)vregister[1];
+    uint8_t mode = (uint8_t)vregister[3];
+    uint32_t addr = (mode == 0) ? 0 : next_byte_addr_in_SRAM;
+    uint8_t byte_addr_incr = byte_addr_increment(n_chan);
+    addr += byte_addr_incr * n;
+    addr &= 0x0001FFFFUL; // Wrap around at 128kB
+    spi0_fetch_sample_data(res, n_chan, addr);
+    nchar = snprintf(str_buf1, NSTRBUF1, "%6d", res[0]);
+    for (uint8_t i=1; i < n_chan; i++) {
+        nchar = snprintf(str_buf2, NSTRBUF2, " %6d", res[i]);
+        strncat(str_buf1, str_buf2, NSTRBUF2);
+    }
+    return str_buf1;
+}
+
 void report_values(void)
 // Report the previously-collected data to the UART.
 // Assume a simple sampling process with immediate event.
 {
+    uint8_t mode = (uint8_t)vregister[3];
     uint8_t n_chan = (uint8_t)vregister[1];
-    uint16_t n_sample = (uint16_t)vregister[2];
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
+    uint16_t n_sample = (uint16_t)vregister[2]; // [FIX-ME] for other modes
     int nchar;
-    byte_addr_in_SRAM = 0;
     for (uint16_t i = 0; i < n_sample; i++) {
-        spi0_fetch_sample_data(res, n_chan, byte_addr_in_SRAM);
-        // [TODO] need to assemble a string based on value of n_chan.
-        nchar = snprintf(str_buf, NSTRBUF, "\r\ncount=%6d %6d %6d %6d %6d %6d %6d",
-                         i, res[0], res[1], res[2], res[3], res[4], res[5]);
+        nchar = snprintf(str_buf, NSTRBUF, "\r\ni=%6d data=%s", i, sample_set_to_str(i));
         usart0_putstr(str_buf);
-        byte_addr_in_SRAM += byte_addr_incr;
-        byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
     }
 } // end void report_values()
 
@@ -491,26 +522,36 @@ void interpret_command()
             // The task takes an indefinite time, so let the COMMS_MCU know.
             assert_busy_pin();
             sample_channels();
+            release_busy_pin();
+            break;
+        case 'G':
+            // The task takes an indefinite time, so let the COMMS_MCU know.
+            assert_busy_pin();
+            sample_channels();
             report_values();
             release_busy_pin();
             break;
-        case 'c':
-            // Report an ADC value.
+        case 'P':
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume channel number.
-                i = (uint8_t) atoi(token_ptr);
-                if (i <= 12) {
-                    // [TODO] v = read_adc(i);
-                    v = 0;
-                    nchar = snprintf(str_buf, NSTRBUF, "%d ok", v);
-                } else {
-                    nchar = snprintf(str_buf, NSTRBUF, "fail");
-                }
+                i = (uint16_t) atoi(token_ptr);
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok", sample_set_to_str(i));
             } else {
                 nchar = snprintf(str_buf, NSTRBUF, "fail");
             }
             usart0_putstr(str_buf);
+            break;
+        case 'a': {
+            uint8_t mode = (uint8_t)vregister[3];
+            uint32_t addr = (mode == 0) ? 0 : next_byte_addr_in_SRAM;
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok", addr);
+            usart0_putstr(str_buf); }
+            break;
+        case 'b': {
+            uint16_t bincr = byte_addr_increment((uint8_t)vregister[1]);
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok", bincr);
+            usart0_putstr(str_buf); }
             break;
         case 'h':
         case '?':
@@ -523,20 +564,24 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\n p      report register values"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n r <i>  report value of register i"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n s <i> <j>  set register i to value j"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n R      restore register values from HEFlash"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n S      save register values to HEFlash"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n R      restore register values from EEPROM"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n S      save register values to EEPROM"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n F      set register values to original values"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n g      go and start sampling"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n c <i>  convert analogue channel i"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n g      go and start sampling (no report)"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n G      go and start sampling, and then report"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n P <i>  report sample set i (i=0 for oldest data)"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n M <i>  SRAM memory dump from byte address i"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n a      report byte address of oldest data"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n b      report size of a sample set in bytes"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\nRegisters:"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 0  sample period in timer ticks (0.8us ticks)"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 1  number of channels to sample"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples in record"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples in record (mode=0)"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  trigger mode 0=immediate, 1=internal, 2=external"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 4  trigger channel for internal trigger"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 5  trigger level as an 11-bit count, 0-2047"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  number of samples to collect after trigger event"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  number of samples to collect after trigger event (mode=1,2_"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 7  PGA flag for all channels, 0=direct 1=via_PGA"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 8  PGA gain 0=8X"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 9  V_REF 0=1.024V"); usart0_putstr(str_buf);
