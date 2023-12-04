@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.7 2023-12-04"
+#define VERSION_STR "v0.8 2023-12-04"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -282,6 +282,12 @@ void adc0_init(void)
     while (ADC0.STATUS & ADC_ADCBUSY_bm) { /* wait for settling */ }
 } // end adc0_init()
 
+void adc0_close(void)
+{
+    ADC0.CTRLA &= ~ADC_ENABLE_bm;
+}
+
+
 uint8_t byte_addr_increment(uint8_t n_chan)
 {
     // We choose an increment such that wrap-around within the 23LC1024 chip
@@ -306,21 +312,26 @@ uint8_t byte_addr_increment(uint8_t n_chan)
 }
 
 void sample_channels(void)
-// As a demonstration, sample the analog channels periodically
-// and report values.
+// Sample the analog channels periodically and store the data in external SRAM.
 {
+    // Get configuration data from virtual registers.
     uint16_t ticks = (uint16_t)vregister[0];
     uint8_t n_chan = (uint8_t)vregister[1];
-    uint16_t n_sample = (uint16_t)vregister[2];
+    uint8_t mode = (uint8_t)vregister[3];
+# define MODE_IMMEDIATE 0
+# define MODE_INTERNAL 1
+# define MODE_EXTERNAL 2
+    uint8_t trigger_chan = (uint8_t)vregister[4];
+    int16_t trigger_level = vregister[5];
+    //
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
-    int nchar;
     uint8_t via_bits;
     if (vregister[7]) {
         via_bits = ADC_VIA_PGA_gc;
     } else {
         via_bits = ADC_VIA_DIRECT_gc;
     }
-    uint8_t muxpos_bits[6], muxneg_bits[6];
+    uint8_t muxpos_bits[MAXNCHAN], muxneg_bits[MAXNCHAN];
     for (uint8_t ch=0; ch < n_chan; ch++) {
         muxpos_bits[ch] = via_bits | (uint8_t)vregister[10+2*ch];
         muxneg_bits[ch] = via_bits | (uint8_t)vregister[11+2*ch];
@@ -328,9 +339,17 @@ void sample_channels(void)
     //
     adc0_init();
     byte_addr_in_SRAM = 0;
+    uint8_t post_event = 0;
+    uint16_t samples_remaining;
+    if (mode == MODE_IMMEDIATE) {
+        samples_remaining = (uint16_t)vregister[2];
+    } else {
+        samples_remaining = (uint16_t)vregister[6];
+    }
     timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
-    for (uint16_t i = 0; i < n_sample; i++) {
+    //
+    while (samples_remaining > 0) {
         sampling_LED_ON();
         for (uint8_t ch=0; ch < n_chan; ch++) {
             // Select ADC channel and make the conversion.
@@ -342,14 +361,31 @@ void sample_channels(void)
         }
         // Save the sample for later.
         spi0_send_sample_data(res, n_chan, byte_addr_in_SRAM);
+        // Point to the next available SRAM address.
         byte_addr_in_SRAM += byte_addr_incr;
-        byte_addr_in_SRAM &= 0x0001FFFFUL; // 128kB range
+        byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
         sampling_LED_OFF();
+        //
+        if (post_event) {
+            samples_remaining--;
+        } else {
+            // Always trigger for the moment.
+            post_event = 1;            
+        }
         timerA0_wait();
     } 
     timerA0_close();
-    //
-    // After all of the collection report the values.
+    adc0_close();
+} // end void sample_channels()
+
+void report_values(void)
+// Report the previously-collected data to the UART.
+// Assume a simple sampling process with immediate event.
+{
+    uint8_t n_chan = (uint8_t)vregister[1];
+    uint16_t n_sample = (uint16_t)vregister[2];
+    uint8_t byte_addr_incr = byte_addr_increment(n_chan);
+    int nchar;
     byte_addr_in_SRAM = 0;
     for (uint16_t i = 0; i < n_sample; i++) {
         spi0_fetch_sample_data(res, n_chan, byte_addr_in_SRAM);
@@ -358,9 +394,9 @@ void sample_channels(void)
                          i, res[0], res[1], res[2], res[3], res[4], res[5]);
         usart0_putstr(str_buf);
         byte_addr_in_SRAM += byte_addr_incr;
-        byte_addr_in_SRAM &= 0x0001FFFFUL; // 128kB range
+        byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
     }
-} // end void sample_channels()
+} // end void report_values()
 
 
 void interpret_command()
@@ -455,6 +491,7 @@ void interpret_command()
             // The task takes an indefinite time, so let the COMMS_MCU know.
             assert_busy_pin();
             sample_channels();
+            report_values();
             release_busy_pin();
             break;
         case 'c':
