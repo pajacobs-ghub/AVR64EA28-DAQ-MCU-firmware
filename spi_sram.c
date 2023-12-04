@@ -27,6 +27,7 @@ void spi0_init()
     SPI0.CTRLA |= SPI_ENABLE_bm;
 }
 
+static inline
 uint8_t spi0_exchange(uint8_t b1)
 {
     // On entry, we assume that previous communications have finished.

@@ -76,7 +76,7 @@ char usart0_getche(void)
 }
 
 int usart0_getstr(char* buf, int nbuf)
-// Read (with echo) a line of characters into the buffer,
+// Read (without echo) a line of characters into the buffer,
 // stopping when we see a return character.
 // Returns the number of characters collected,
 // excluding the terminating null char.
@@ -85,7 +85,7 @@ int usart0_getstr(char* buf, int nbuf)
     char c;
     uint8_t done = 0;
     while (!done) {
-        c = usart0_getche();
+        c = usart0_getch();
         if (c != '\n' && c != '\r' && c != '\b' && i < (nbuf-1)) {
             // Append a normal character.
             buf[i] = c;

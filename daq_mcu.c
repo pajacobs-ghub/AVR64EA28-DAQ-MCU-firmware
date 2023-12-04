@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.6 2023-12-03"
+#define VERSION_STR "v0.7 2023-12-04"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -39,6 +39,57 @@ char str_buf[NSTRBUF];
 char cmd_buf[NCMDBUF];
 
 #define MAXNCHAN 12
+int16_t res[MAXNCHAN];
+
+// State of play is indicated by these flags.
+uint32_t byte_addr_in_SRAM;
+uint8_t busy_n;
+uint8_t event_n;
+
+static inline void assert_event_pin()
+{
+    // Actively pull the pin low.
+    PORTF.OUTCLR = PIN1_bm;
+    PORTF.DIRSET = PIN1_bm;
+    event_n = 0;
+}
+
+static inline void release_event_pin()
+{
+    // Release drive on the pin.
+    PORTF.DIRSET = PIN1_bm;
+    event_n = 1;
+}
+
+static inline uint8_t read_event_pin()
+{
+    return (PORTF.IN & PIN1_bm) ? 1 : 0;   
+}
+
+static inline void assert_busy_pin()
+{
+    // Actively pull the pin low.
+    PORTF.OUTCLR = PIN0_bm;
+    PORTF.DIRSET = PIN0_bm;
+    busy_n = 0;
+}
+
+static inline void release_busy_pin()
+{
+    // Release drive on the pin.
+    PORTF.DIRCLR = PIN0_bm;
+    busy_n = 1;
+}
+
+static inline void sampling_LED_ON()
+{
+    PORTA.OUTSET = PIN3_bm;
+}
+
+static inline void sampling_LED_OFF()
+{
+    PORTA.OUTCLR = PIN3_bm;
+}
 
 // Bit patterns for selecting analog-input pins.
 const uint8_t muxpos_pin[] = {
@@ -189,10 +240,17 @@ void iopins_init(void)
     PORTA.DIRSET = PIN4_bm; // 0.MOSI
     PORTA.DIRSET = PIN6_bm; // 0.SCK
     PORTA.DIRCLR = PIN5_bm; // 0.MISO
+    // Reserve PF2 for CS_B#.
+    PORTF.DIRSET = PIN2_bm;
+    PORTF.OUTSET = PIN2_bm;
     //
-    // Use PF0 to indicate the time for ADC conversion.
-    PORTF.DIRSET = PIN0_bm;
-    PORTF.OUTCLR = PIN0_bm;
+    // Use PF0 to indicate ready/busy#.
+    release_busy_pin();
+    // Use PF1 to indicate event#.
+    release_event_pin();
+    // Use PF3 to indicate period of sampling.
+    PORTA.DIRSET = PIN3_bm;
+    sampling_LED_OFF();
     //
     // 12 analog-in pins
     PORTC.DIRCLR = PIN0_bm; // Input for AIN28
@@ -254,8 +312,6 @@ void sample_channels(void)
     uint16_t ticks = (uint16_t)vregister[0];
     uint8_t n_chan = (uint8_t)vregister[1];
     uint16_t n_sample = (uint16_t)vregister[2];
-    int16_t res[MAXNCHAN];
-    uint32_t byte_addr_in_SRAM = 0;
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     int nchar;
     uint8_t via_bits;
@@ -271,10 +327,11 @@ void sample_channels(void)
     }
     //
     adc0_init();
+    byte_addr_in_SRAM = 0;
     timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
     for (uint16_t i = 0; i < n_sample; i++) {
-        PORTF.OUTSET = PIN0_bm;
+        sampling_LED_ON();
         for (uint8_t ch=0; ch < n_chan; ch++) {
             // Select ADC channel and make the conversion.
             ADC0.MUXPOS = muxpos_bits[ch];
@@ -287,7 +344,7 @@ void sample_channels(void)
         spi0_send_sample_data(res, n_chan, byte_addr_in_SRAM);
         byte_addr_in_SRAM += byte_addr_incr;
         byte_addr_in_SRAM &= 0x0001FFFFUL; // 128kB range
-        PORTF.OUTCLR = PIN0_bm;
+        sampling_LED_OFF();
         timerA0_wait();
     } 
     timerA0_close();
@@ -395,7 +452,10 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'g':
+            // The task takes an indefinite time, so let the COMMS_MCU know.
+            assert_busy_pin();
             sample_channels();
+            release_busy_pin();
             break;
         case 'c':
             // Report an ADC value.
