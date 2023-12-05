@@ -96,3 +96,26 @@ void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr)
     }   
     PORTA.OUTSET |= PIN7_bm;    
 }
+
+void spi0_fetch_bytes(uint8_t bytes[], uint8_t n, uint32_t addr)
+// bytes : array to put the incoming data
+// n     : number of bytes to fetch
+// addr  : starting byte address within the SRAM chip
+{
+    uint8_t b1, b2;
+    if (n == 0) return; // Nothing to do.
+    PORTA.OUTCLR |= PIN7_bm;
+    b1 = 0b11; // Read command.
+    b2 = spi0_exchange(b1);
+    b1 = (uint8_t) (addr >> 16);
+    b2 = spi0_exchange(b1);
+    b1 = (uint8_t) (addr >> 8);
+    b2 = spi0_exchange(b1);
+    b1 = (uint8_t) addr;
+    b2 = spi0_exchange(b1);
+    b1 = 0;
+    for (uint8_t i=0; i < n; i++) {
+        bytes[i] = spi0_exchange(b1);
+    }   
+    PORTA.OUTSET |= PIN7_bm;    
+}

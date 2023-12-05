@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.9 2023-12-04"
+#define VERSION_STR "v0.10 2023-12-05"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -30,7 +30,7 @@
 #pragma config SUT = SUT_64MS
 
 // String buffer for assembling text for output.
-#define NSTRBUF 128
+#define NSTRBUF 256
 char str_buf[NSTRBUF];
 // Text buffer for incoming commands.
 // They are expected to be short.
@@ -414,6 +414,22 @@ char* sample_set_to_str(uint16_t n)
     return str_buf1;
 }
 
+#define NBYTES 32
+uint8_t bytes[NBYTES];
+
+char* mem_dump_to_str(uint32_t addr)
+{
+    int nchar;
+    uint8_t mode = (uint8_t)vregister[3];
+    spi0_fetch_bytes(bytes, NBYTES, addr);
+    nchar = snprintf(str_buf1, NSTRBUF1, "%02x", bytes[0]);
+    for (uint8_t i=1; i < NBYTES; i++) {
+        nchar = snprintf(str_buf2, NSTRBUF2, "%02x", bytes[i]);
+        strncat(str_buf1, str_buf2, NSTRBUF2);
+    }
+    return str_buf1;
+}
+
 void report_values(void)
 // Report the previously-collected data to the UART.
 // Assume a simple sampling process with immediate event.
@@ -552,6 +568,17 @@ void interpret_command()
             uint16_t bincr = byte_addr_increment((uint8_t)vregister[1]);
             nchar = snprintf(str_buf, NSTRBUF, "%u ok", bincr);
             usart0_putstr(str_buf); }
+            break;
+        case 'M':
+            token_ptr = strtok(&cmd_buf[1], sep_tok);
+            if (token_ptr) {
+                // Found some nonblank text, assume address.
+                uint32_t addr = (uint32_t) atol(token_ptr);
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok", mem_dump_to_str(addr));
+            } else {
+                nchar = snprintf(str_buf, NSTRBUF, "fail");
+            }
+            usart0_putstr(str_buf);
             break;
         case 'h':
         case '?':

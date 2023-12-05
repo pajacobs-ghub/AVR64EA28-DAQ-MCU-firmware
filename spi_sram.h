@@ -14,5 +14,6 @@ void spi0_close();
 
 void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr);
 void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr);
+void spi0_fetch_bytes(uint8_t bytes[], uint8_t n, uint32_t addr);
 
 #endif
