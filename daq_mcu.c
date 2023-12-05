@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.10 2023-12-05"
+#define VERSION_STR "v0.11 2023-12-05"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -134,7 +134,7 @@ const char hint[NUMREG][12] = {
     "TRIG_MODE", // 3
     "TRIG_CHAN", // 4
     "TRIG_LEVEL",// 5
-    "POST_TRIG", // 6
+    "TRIG_SLOPE", // 6
     "PGA_FLAG",  // 7
     "PGA_GAIN",  // 8
     "V_REF",     // 9
@@ -168,11 +168,11 @@ void set_registers_to_original_values()
 {
     vregister[0] = 1250; // sample period in timer ticks 
     vregister[1] = 6;    // number of channels to sample
-    vregister[2] = 128;  // number of samples in record
+    vregister[2] = 128;  // number of samples in record after trigger event
     vregister[3] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
     vregister[4] = 0;    // trigger channel for internal trigger
     vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
-    vregister[6] = 128;  // number of samples to collect after trigger event
+    vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level 
     vregister[7] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
     vregister[8] = 0;    // PGA gain 0=8X
     vregister[9] = 0;    // V_REF 0=1.024V
@@ -311,6 +311,14 @@ uint8_t byte_addr_increment(uint8_t n_chan)
     return 32;
 }
 
+uint16_t max_n_samples(void)
+{
+    uint8_t n_chan = (uint8_t)vregister[1];
+    uint8_t byte_addr_incr = byte_addr_increment(n_chan);
+    // Assume that one 23LC1024 chip is present, with 128kB memory.
+    return 0x00020000UL / byte_addr_incr; 
+}
+
 void sample_channels(void)
 // Sample the analog channels periodically and store the data in external SRAM.
 // 
@@ -331,11 +339,12 @@ void sample_channels(void)
     uint16_t ticks = (uint16_t)vregister[0];
     uint8_t n_chan = (uint8_t)vregister[1];
     uint8_t mode = (uint8_t)vregister[3];
-# define MODE_IMMEDIATE 0
-# define MODE_INTERNAL 1
-# define MODE_EXTERNAL 2
+# define TRIGGER_IMMEDIATE 0
+# define TRIGGER_INTERNAL 1
+# define TRIGGER_EXTERNAL 2
     uint8_t trigger_chan = (uint8_t)vregister[4];
     int16_t trigger_level = vregister[5];
+    uint8_t trigger_slope = (uint8_t)vregister[6];
     //
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     uint8_t via_bits;
@@ -350,15 +359,11 @@ void sample_channels(void)
         muxneg_bits[ch] = via_bits | (uint8_t)vregister[11+2*ch];
     }
     //
+    release_event_pin();
     adc0_init();
     next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
     uint8_t post_event = 0;
-    uint16_t samples_remaining;
-    if (mode == MODE_IMMEDIATE) {
-        samples_remaining = (uint16_t)vregister[2];
-    } else {
-        samples_remaining = (uint16_t)vregister[6];
-    }
+    uint16_t samples_remaining = (uint16_t)vregister[2];
     timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
     //
@@ -376,14 +381,33 @@ void sample_channels(void)
         spi0_send_sample_data(res, n_chan, next_byte_addr_in_SRAM);
         // Point to the next available SRAM address.
         next_byte_addr_in_SRAM += byte_addr_incr;
-        next_byte_addr_in_SRAM &= 0x0001FFFFUL; // Wrap around at 128kB
+        // Wrap around at 128kB, assuming one SRAM chip.
+        next_byte_addr_in_SRAM &= 0x0001FFFFUL;
         sampling_LED_OFF();
         //
         if (post_event) {
+            // Trigger event has happened.
             samples_remaining--;
         } else {
-            // Always trigger for the moment.
-            post_event = 1;            
+            // We need to decide about trigger event.
+            switch (mode) {
+            case TRIGGER_IMMEDIATE:
+                post_event = 1;
+                assert_event_pin();
+                break;
+            case TRIGGER_INTERNAL: {
+                int16_t s = res[trigger_chan];
+                if ((trigger_slope == 1 && s >= trigger_level) ||
+                    (trigger_slope == 0 && s <= trigger_level)) {
+                    post_event = 1;
+                    assert_event_pin();
+                } }
+                break;
+            case TRIGGER_EXTERNAL:
+                if (read_event_pin() == 0) {
+                    post_event = 1;
+                }
+            }
         }
         timerA0_wait();
     } 
@@ -401,10 +425,10 @@ char* sample_set_to_str(uint16_t n)
     int nchar;
     uint8_t n_chan = (uint8_t)vregister[1];
     uint8_t mode = (uint8_t)vregister[3];
-    uint32_t addr = (mode == 0) ? 0 : next_byte_addr_in_SRAM;
+    // Start with address of oldest sample, then move to selected sample.
+    uint32_t addr = (mode == TRIGGER_IMMEDIATE) ? 0 : next_byte_addr_in_SRAM;
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     addr += byte_addr_incr * n;
-    addr &= 0x0001FFFFUL; // Wrap around at 128kB
     spi0_fetch_sample_data(res, n_chan, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%6d", res[0]);
     for (uint8_t i=1; i < n_chan; i++) {
@@ -420,7 +444,6 @@ uint8_t bytes[NBYTES];
 char* mem_dump_to_str(uint32_t addr)
 {
     int nchar;
-    uint8_t mode = (uint8_t)vregister[3];
     spi0_fetch_bytes(bytes, NBYTES, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%02x", bytes[0]);
     for (uint8_t i=1; i < NBYTES; i++) {
@@ -435,9 +458,7 @@ void report_values(void)
 // Assume a simple sampling process with immediate event.
 {
     uint8_t mode = (uint8_t)vregister[3];
-    uint8_t n_chan = (uint8_t)vregister[1];
-    uint8_t byte_addr_incr = byte_addr_increment(n_chan);
-    uint16_t n_sample = (uint16_t)vregister[2]; // [FIX-ME] for other modes
+    uint16_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint16_t)vregister[2] : max_n_samples();
     int nchar;
     for (uint16_t i = 0; i < n_sample; i++) {
         nchar = snprintf(str_buf, NSTRBUF, "\r\ni=%6d data=%s", i, sample_set_to_str(i));
@@ -569,6 +590,10 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "%u ok", bincr);
             usart0_putstr(str_buf); }
             break;
+        case 'm': {
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok", max_n_samples());
+            usart0_putstr(str_buf); }
+            break;
         case 'M':
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
@@ -600,15 +625,16 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\n M <i>  SRAM memory dump from byte address i"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n a      report byte address of oldest data"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n b      report size of a sample set in bytes"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n m      report max number of samples in SRAM"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\nRegisters:"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 0  sample period in timer ticks (0.8us ticks)"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 1  number of channels to sample"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples in record (mode=0)"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples after trigger event"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  trigger mode 0=immediate, 1=internal, 2=external"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 4  trigger channel for internal trigger"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 5  trigger level as an 11-bit count, 0-2047"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  number of samples to collect after trigger event (mode=1,2_"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  trigger slope 0=sample-below-level, 1=sample-above-level"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 7  PGA flag for all channels, 0=direct 1=via_PGA"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 8  PGA gain 0=8X"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 9  V_REF 0=1.024V"); usart0_putstr(str_buf);
