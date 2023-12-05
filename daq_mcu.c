@@ -9,7 +9,7 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.11 2023-12-05"
+#define VERSION_STR "v0.12 2023-12-05"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -57,13 +57,13 @@ static inline void assert_event_pin()
 static inline void release_event_pin()
 {
     // Release drive on the pin.
-    PORTF.DIRSET = PIN1_bm;
+    PORTF.DIRCLR = PIN1_bm;
     event_n = 1;
 }
 
 static inline uint8_t read_event_pin()
 {
-    return (PORTF.IN & PIN1_bm) ? 1 : 0;   
+    return (PORTF.IN & PIN1_bm) ? 1 : 0;
 }
 
 static inline void assert_busy_pin()
@@ -166,13 +166,13 @@ const char hint[NUMREG][12] = {
 
 void set_registers_to_original_values()
 {
-    vregister[0] = 1250; // sample period in timer ticks 
+    vregister[0] = 1250; // sample period in timer ticks
     vregister[1] = 6;    // number of channels to sample
     vregister[2] = 128;  // number of samples in record after trigger event
     vregister[3] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
     vregister[4] = 0;    // trigger channel for internal trigger
     vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
-    vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level 
+    vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
     vregister[7] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
     vregister[8] = 0;    // PGA gain 0=8X
     vregister[9] = 0;    // V_REF 0=1.024V
@@ -240,15 +240,15 @@ void iopins_init(void)
     PORTA.DIRSET = PIN4_bm; // 0.MOSI
     PORTA.DIRSET = PIN6_bm; // 0.SCK
     PORTA.DIRCLR = PIN5_bm; // 0.MISO
-    // Reserve PF2 for CS_B#.
-    PORTF.DIRSET = PIN2_bm;
-    PORTF.OUTSET = PIN2_bm;
+    // Reserve PA2 for CS_B#.
+    PORTA.DIRSET = PIN2_bm;
+    PORTA.OUTSET = PIN2_bm;
     //
     // Use PF0 to indicate ready/busy#.
     release_busy_pin();
     // Use PF1 to indicate event#.
     release_event_pin();
-    // Use PF3 to indicate period of sampling.
+    // Use PA3 to indicate period of sampling.
     PORTA.DIRSET = PIN3_bm;
     sampling_LED_OFF();
     //
@@ -276,7 +276,7 @@ void adc0_init(void)
     ADC0.CTRLA |= ADC_LOWLAT_bm | ADC_ENABLE_bm;
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
     ADC0.CTRLC = ADC_REFSEL_1V024_gc;
-    ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
+    ADC0.CTRLE = 25; // SAMPDUR of 5 microseconds
     ADC0.CTRLF |= ADC_SAMPNUM_NONE_gc;
     ADC0.PGACTRL = ADC_GAIN_8X_gc | ADC_PGABIASSEL_100PCT_gc | ADC_PGAEN_bm;
     while (ADC0.STATUS & ADC_ADCBUSY_bm) { /* wait for settling */ }
@@ -316,21 +316,21 @@ uint16_t max_n_samples(void)
     uint8_t n_chan = (uint8_t)vregister[1];
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     // Assume that one 23LC1024 chip is present, with 128kB memory.
-    return 0x00020000UL / byte_addr_incr; 
+    return 0x00020000UL / byte_addr_incr;
 }
 
 void sample_channels(void)
 // Sample the analog channels periodically and store the data in external SRAM.
-// 
+//
 // For mode=0, we will consider that the trigger event is immediate, at sample 0,
 // and the record will stop after a specified number of samples.
 // So long as the record does not wrap around, the oldest sample set will start at
 // byte address 0.
 //
-// For mode=1 or 2, we will start sampling into the external SRAM 
+// For mode=1 or 2, we will start sampling into the external SRAM
 // for an indefinite number of samples, while waiting for the trigger event.
 // Once the trigger event happens, we will continue the record for a specified
-// number of samples.  Because we do not keep a record of the number of times 
+// number of samples.  Because we do not keep a record of the number of times
 // that the SRAM address wraps around, we just assume that the oldest sample
 // starts at the next byte address to be used to store a sample.
 //
@@ -407,10 +407,10 @@ void sample_channels(void)
                 if (read_event_pin() == 0) {
                     post_event = 1;
                 }
-            }
+            } // end switch
         }
         timerA0_wait();
-    } 
+    } // end while
     timerA0_close();
     adc0_close();
 } // end void sample_channels()
@@ -477,7 +477,7 @@ void interpret_command()
     // nchar = snprintf(str_buf, NSTRBUF, "\rCommand text was: ");
     // usart0_putstr(str_buf); usart0_putstr(cmd_buf);
     // nchar = snprintf(str_buf, NSTRBUF, "\r\nNumber of characters in buffer: %u", strlen(cmd_buf));
-    // usart0_putstr(str_buf); 
+    // usart0_putstr(str_buf);
     switch (cmd_buf[0]) {
         case 'v':
             nchar = snprintf(str_buf, NSTRBUF, "%s ok", VERSION_STR);
@@ -491,8 +491,8 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\nRegister values:");
             usart0_putstr(str_buf);
             for (i=0; i < NUMREG; ++i) {
-                nchar = snprintf(str_buf, NSTRBUF, "\r\nreg[%d]=%d   (%s)", 
-                        i, vregister[i], hint[i]);
+                nchar = snprintf(str_buf, NSTRBUF, "\r\nreg[%d]=%d   (%s)",
+                                 i, vregister[i], hint[i]);
                 usart0_putstr(str_buf);
             }
             nchar = snprintf(str_buf, NSTRBUF, "\r\nok");
@@ -622,7 +622,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\n g      go and start sampling (no report)"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n G      go and start sampling, and then report"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n P <i>  report sample set i (i=0 for oldest data)"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n M <i>  SRAM memory dump from byte address i"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n M <i>  dump SRAM memory from byte address i"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n a      report byte address of oldest data"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n b      report size of a sample set in bytes"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n m      report max number of samples in SRAM"); usart0_putstr(str_buf);
@@ -634,7 +634,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  trigger mode 0=immediate, 1=internal, 2=external"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 4  trigger channel for internal trigger"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 5  trigger level as an 11-bit count, 0-2047"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  trigger slope 0=sample-below-level, 1=sample-above-level"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  trigger slope 0=below-level, 1=above-level"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 7  PGA flag for all channels, 0=direct 1=via_PGA"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 8  PGA gain 0=8X"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\r\n 9  V_REF 0=1.024V"); usart0_putstr(str_buf);
@@ -663,16 +663,14 @@ int main(void)
     int ncmd, nchar;
     //
     // Turn off the main clock prescaler so that we run at full 20MHz.
-    ccp_write_io((void *) & (CLKCTRL.MCLKCTRLB), (CLKCTRL.MCLKCTRLB & 0xfe));
+    ccp_write_io((void *) &(CLKCTRL.MCLKCTRLB), (CLKCTRL.MCLKCTRLB & 0xfe));
     CLKCTRL.MCLKTIMEBASE = TIMEBASE_VALUE; // Needed for the ADC
     iopins_init();
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
     usart0_init(460800);
     spi0_init();
-    //
     nchar = snprintf(str_buf, NSTRBUF, "\r\nAVR64EA28 DAQ-MCU\r\n%s", VERSION_STR);
     usart0_putstr(str_buf);
-    //
     restore_registers_from_EEPROM();
     //
     // The basic behaviour is to be forever checking for a text command.
@@ -681,7 +679,7 @@ int main(void)
     while (1) {
         // Characters are echoed as they are typed.
         // Backspace deleting is allowed.
-        ncmd = usart0_getstr(cmd_buf, NCMDBUF); 
+        ncmd = usart0_getstr(cmd_buf, NCMDBUF);
         if (ncmd) {
             interpret_command();
             nchar = snprintf(str_buf, NSTRBUF, "\r\ncmd> ");
