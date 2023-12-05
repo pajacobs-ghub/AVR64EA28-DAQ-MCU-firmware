@@ -276,7 +276,7 @@ void adc0_init(void)
     ADC0.CTRLA |= ADC_LOWLAT_bm | ADC_ENABLE_bm;
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
     ADC0.CTRLC = ADC_REFSEL_1V024_gc;
-    ADC0.CTRLE = 25; // SAMPDUR of 5 microseconds
+    ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
     ADC0.CTRLF |= ADC_SAMPNUM_NONE_gc;
     ADC0.PGACTRL = ADC_GAIN_8X_gc | ADC_PGABIASSEL_100PCT_gc | ADC_PGAEN_bm;
     while (ADC0.STATUS & ADC_ADCBUSY_bm) { /* wait for settling */ }
