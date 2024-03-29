@@ -7,9 +7,11 @@
 // 2023-11-21 Add the basic command interpreter and let it run the show.
 // 2023-12-03 Make use of external memory for sample storage.
 // 2023-12-03 EEPROM code for saving and restoring config register values.
+// 2024-03-29 Less chatty mode for interfacing with PIC18 COMMS-MCU.
+//            Changed to using new-line character at end of output messages.
 
 // This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.12 2023-12-05"
+#define VERSION_STR "v0.13 2024-03-29"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -32,6 +34,7 @@
 // String buffer for assembling text for output.
 #define NSTRBUF 256
 char str_buf[NSTRBUF];
+char allow_multiline_response = 0;
 // Text buffer for incoming commands.
 // They are expected to be short.
 // Be careful, overruns are not handled well.
@@ -461,7 +464,7 @@ void report_values(void)
     uint16_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint16_t)vregister[2] : max_n_samples();
     int nchar;
     for (uint16_t i = 0; i < n_sample; i++) {
-        nchar = snprintf(str_buf, NSTRBUF, "\r\ni=%6d data=%s", i, sample_set_to_str(i));
+        nchar = snprintf(str_buf, NSTRBUF, "i=%6d data=%s\n", i, sample_set_to_str(i));
         usart0_putstr(str_buf);
     }
 } // end void report_values()
@@ -474,28 +477,44 @@ void interpret_command()
     int nchar;
     uint8_t i;
     int16_t v;
-    // nchar = snprintf(str_buf, NSTRBUF, "\rCommand text was: ");
-    // usart0_putstr(str_buf); usart0_putstr(cmd_buf);
-    // nchar = snprintf(str_buf, NSTRBUF, "\r\nNumber of characters in buffer: %u", strlen(cmd_buf));
+    // The following few lines for debug on the end of a TTL-232 cable.
+    // nchar = snprintf(str_buf, NSTRBUF, "Command text was: ");
+    // usart0_putstr(str_buf);
+    // usart0_putstr(cmd_buf); usart0_putch('\n');
+    // nchar = snprintf(str_buf, NSTRBUF, "Number of characters in buffer: %u\n", strlen(cmd_buf));
     // usart0_putstr(str_buf);
     switch (cmd_buf[0]) {
         case 'v':
-            nchar = snprintf(str_buf, NSTRBUF, "%s ok", VERSION_STR);
+            nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", VERSION_STR);
             usart0_putstr(str_buf);
             break;
         case 'n':
-            nchar = snprintf(str_buf, NSTRBUF, "%u ok", NUMREG);
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", NUMREG);
+            usart0_putstr(str_buf);
+            break;
+        case 'Q':
+            allow_multiline_response = 1;
+            nchar = snprintf(str_buf, NSTRBUF, "Multi-line response mode. ok\n");
+            usart0_putstr(str_buf);
+            break;
+        case 'q':
+            allow_multiline_response = 0;
+            nchar = snprintf(str_buf, NSTRBUF, "Single-line response mode. ok\n");
             usart0_putstr(str_buf);
             break;
         case 'p':
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nRegister values:");
-            usart0_putstr(str_buf);
-            for (i=0; i < NUMREG; ++i) {
-                nchar = snprintf(str_buf, NSTRBUF, "\r\nreg[%d]=%d   (%s)",
-                                 i, vregister[i], hint[i]);
+            if (allow_multiline_response) {
+                nchar = snprintf(str_buf, NSTRBUF, "Register values:\n");
                 usart0_putstr(str_buf);
+                for (i=0; i < NUMREG; ++i) {
+                    nchar = snprintf(str_buf, NSTRBUF, "reg[%d]=%d   (%s)\n",
+                                     i, vregister[i], hint[i]);
+                    usart0_putstr(str_buf);
+                }
+                nchar = snprintf(str_buf, NSTRBUF, "ok\n");
+            } else {
+                nchar = snprintf(str_buf, NSTRBUF, "fail: Too many values to show.\n");
             }
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nok");
             usart0_putstr(str_buf);
             break;
         case 'r':
@@ -506,12 +525,12 @@ void interpret_command()
                 i = (uint8_t) atoi(token_ptr);
                 if (i < NUMREG) {
                     v = vregister[i];
-                    nchar = snprintf(str_buf, NSTRBUF, "%d ok", v);
+                    nchar = snprintf(str_buf, NSTRBUF, "%d ok\n", v);
                 } else {
-                    nchar = snprintf(str_buf, NSTRBUF, "fail");
+                    nchar = snprintf(str_buf, NSTRBUF, "fail: Invalid register.\n");
                 }
             } else {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
+                nchar = snprintf(str_buf, NSTRBUF, "fail: No register specified.\n");
             }
             usart0_putstr(str_buf);
             break;
@@ -520,7 +539,6 @@ void interpret_command()
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text; assume register number.
-                // printf("text:\"%s\"", token_ptr);
                 i = (uint8_t) atoi(token_ptr);
                 if (i < NUMREG) {
                     token_ptr = strtok(NULL, sep_tok);
@@ -528,70 +546,81 @@ void interpret_command()
                         // Assume text is value for register.
                         v = (int16_t) atoi(token_ptr);
                         vregister[i] = v;
-                        nchar = snprintf(str_buf, NSTRBUF, "reg[%u] %d ok", i, v);
+                        nchar = snprintf(str_buf, NSTRBUF, "reg[%u] %d ok\n", i, v);
                     } else {
-                        nchar = snprintf(str_buf, NSTRBUF, "fail");
+                        nchar = snprintf(str_buf, NSTRBUF, "fail: No value given.\n");
                     }
                 } else {
-                    nchar = snprintf(str_buf, NSTRBUF, "fail");
+                    nchar = snprintf(str_buf, NSTRBUF, "fail: Invalid register.\n");
                 }
             } else {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
+                nchar = snprintf(str_buf, NSTRBUF, "fail: No register specified.\n");
             }
             usart0_putstr(str_buf);
             break;
         case 'R':
             restore_registers_from_EEPROM();
-            nchar = snprintf(str_buf, NSTRBUF, "ok");
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'S':
             save_registers_to_EEPROM();
-            nchar = snprintf(str_buf, NSTRBUF, "ok");
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'F':
             set_registers_to_original_values();
-            nchar = snprintf(str_buf, NSTRBUF, "ok");
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'g':
-            // The task takes an indefinite time, so let the COMMS_MCU know.
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n");
+            usart0_putstr(str_buf);
+            // The task takes an indefinite time,
+            // so let the COMMS_MCU know via busy# pin.
             assert_busy_pin();
             sample_channels();
             release_busy_pin();
             break;
         case 'G':
-            // The task takes an indefinite time, so let the COMMS_MCU know.
-            assert_busy_pin();
-            sample_channels();
-            report_values();
-            release_busy_pin();
+            if (allow_multiline_response) {
+                nchar = snprintf(str_buf, NSTRBUF, "ok\n");
+                usart0_putstr(str_buf);
+                // The task takes an indefinite time,
+                // so let the COMMS_MCU know via busy# pin.
+                assert_busy_pin();
+                sample_channels();
+                report_values();
+                release_busy_pin();
+            } else {
+                nchar = snprintf(str_buf, NSTRBUF, "fail: Action not available.\n");
+                usart0_putstr(str_buf);                
+            }
             break;
         case 'P':
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
-                // Found some nonblank text, assume channel number.
+                // Found some nonblank text, assume sample index.
                 i = (uint16_t) atoi(token_ptr);
-                nchar = snprintf(str_buf, NSTRBUF, "%s ok", sample_set_to_str(i));
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(i));
             } else {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
+                nchar = snprintf(str_buf, NSTRBUF, "fail: No index given.\n");
             }
             usart0_putstr(str_buf);
             break;
         case 'a': {
             uint8_t mode = (uint8_t)vregister[3];
             uint32_t addr = (mode == 0) ? 0 : next_byte_addr_in_SRAM;
-            nchar = snprintf(str_buf, NSTRBUF, "%lu ok", addr);
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", addr);
             usart0_putstr(str_buf); }
             break;
         case 'b': {
             uint16_t bincr = byte_addr_increment((uint8_t)vregister[1]);
-            nchar = snprintf(str_buf, NSTRBUF, "%u ok", bincr);
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", bincr);
             usart0_putstr(str_buf); }
             break;
         case 'm': {
-            nchar = snprintf(str_buf, NSTRBUF, "%u ok", max_n_samples());
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", max_n_samples());
             usart0_putstr(str_buf); }
             break;
         case 'M':
@@ -599,61 +628,68 @@ void interpret_command()
             if (token_ptr) {
                 // Found some nonblank text, assume address.
                 uint32_t addr = (uint32_t) atol(token_ptr);
-                nchar = snprintf(str_buf, NSTRBUF, "%s ok", mem_dump_to_str(addr));
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", mem_dump_to_str(addr));
             } else {
-                nchar = snprintf(str_buf, NSTRBUF, "fail");
+                nchar = snprintf(str_buf, NSTRBUF, "fail: No address given.\n");
             }
             usart0_putstr(str_buf);
             break;
         case 'h':
         case '?':
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nAVR64EA28 DAQ-MCU commands and registers"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nCommands:"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n h or ? print this help message"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n v      report version of firmware"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n n      report number of registers"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n p      report register values"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n r <i>  report value of register i"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n s <i> <j>  set register i to value j"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n R      restore register values from EEPROM"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n S      save register values to EEPROM"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n F      set register values to original values"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n g      go and start sampling (no report)"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n G      go and start sampling, and then report"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n P <i>  report sample set i (i=0 for oldest data)"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n M <i>  dump SRAM memory from byte address i"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n a      report byte address of oldest data"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n b      report size of a sample set in bytes"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n m      report max number of samples in SRAM"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nRegisters:"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 0  sample period in timer ticks (0.8us ticks)"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 1  number of channels to sample"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 2  number of samples after trigger event"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 3  trigger mode 0=immediate, 1=internal, 2=external"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 4  trigger channel for internal trigger"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 5  trigger level as an 11-bit count, 0-2047"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 6  trigger slope 0=below-level, 1=above-level"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 7  PGA flag for all channels, 0=direct 1=via_PGA"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 8  PGA gain 0=8X"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 9  V_REF 0=1.024V"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 10 CH0+   22 CH6+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 11 CH0-   23 CH6-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 12 CH1+   24 CH7+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 13 CH1-   25 CH7-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 14 CH2+   26 CH8+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 15 CH2-   27 CH8-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 16 CH3+   28 CH9+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 17 CH3-   29 CH9-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 18 CH4+   30 CH10+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 19 CH4-   31 CH10-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 20 CH5+   32 CH11+"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\n 21 CH5-   33 CH11-"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, "\r\nok"); usart0_putstr(str_buf);
+            if (!allow_multiline_response) {
+                nchar = snprintf(str_buf, NSTRBUF, "In single-line response mode. Q to get multi-line mode. ok\n");
+                usart0_putstr(str_buf);
+                break;
+            }
+            nchar = snprintf(str_buf, NSTRBUF, "AVR64EA28 DAQ-MCU commands and registers\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "Commands:\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " h or ? print this help message\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " v      report version of firmware\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " Q      Change to multi-line response mode\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " q      Change to single-line response mode\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " n      report number of registers\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " p      report register values\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " r <i>  report value of register i\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " s <i> <j>  set register i to value j\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " R      restore register values from EEPROM\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " S      save register values to EEPROM\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " F      set register values to original values\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " g      go and start sampling (no report)\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " G      go and start sampling, and then report\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " P <i>  report sample set i (i=0 for oldest data)\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " M <i>  dump SRAM memory from byte address i\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " a      report byte address of oldest data\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " b      report size of a sample set in bytes\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " m      report max number of samples in SRAM\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "Registers:\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 0  sample period in timer ticks (0.8us ticks)\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 1  number of channels to sample\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 2  number of samples after trigger event\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 3  trigger mode 0=immediate, 1=internal, 2=external\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 4  trigger channel for internal trigger\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 5  trigger level as an 11-bit count, 0-2047\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 6  trigger slope 0=below-level, 1=above-level\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 7  PGA flag for all channels, 0=direct 1=via_PGA\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 8  PGA gain 0=8X\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 9  V_REF 0=1.024V\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 10 CH0+   22 CH6+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 11 CH0-   23 CH6-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 12 CH1+   24 CH7+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 13 CH1-   25 CH7-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 14 CH2+   26 CH8+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 15 CH2-   27 CH8-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 16 CH3+   28 CH9+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 17 CH3-   29 CH9-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 18 CH4+   30 CH10+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 19 CH4-   31 CH10-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 20 CH5+   32 CH11+\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 21 CH5-   33 CH11-\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n"); usart0_putstr(str_buf);
             break;
         default:
-            nchar = snprintf(str_buf, NSTRBUF, "fail"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, "fail: Unknown command.\n"); usart0_putstr(str_buf);
     } // end switch
 } // end interpret_command())
 
@@ -669,21 +705,17 @@ int main(void)
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
     usart0_init(460800);
     spi0_init();
-    nchar = snprintf(str_buf, NSTRBUF, "\r\nAVR64EA28 DAQ-MCU\r\n%s", VERSION_STR);
-    usart0_putstr(str_buf);
+    // 2024-03-29 Change to a less chatty mode where the AVR only outputs
+    // text in response to incoming commands.
     restore_registers_from_EEPROM();
     //
     // The basic behaviour is to be forever checking for a text command.
-    nchar = snprintf(str_buf, NSTRBUF, "\r\ncmd> ");
-    usart0_putstr(str_buf);
     while (1) {
-        // Characters are echoed as they are typed.
+        // Characters are NOT echoed as they are typed.
         // Backspace deleting is allowed.
         ncmd = usart0_getstr(cmd_buf, NCMDBUF);
         if (ncmd) {
             interpret_command();
-            nchar = snprintf(str_buf, NSTRBUF, "\r\ncmd> ");
-            usart0_putstr(str_buf);
         }
     } // never-ending while
     spi0_close();
