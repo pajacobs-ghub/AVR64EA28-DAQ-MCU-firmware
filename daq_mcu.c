@@ -10,8 +10,8 @@
 // 2024-03-29 Less chatty mode for interfacing with PIC18 COMMS-MCU.
 //            Changed to using new-line character at end of output messages.
 
-// This version string will be printed shortly after MCU reset.
-#define VERSION_STR "v0.13 2024-03-29"
+// This version string will be reported by the version command.
+#define VERSION_STR "v0.13 AVR64EA28 DAQ-MCU 2024-03-29"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -703,7 +703,7 @@ int main(void)
     CLKCTRL.MCLKTIMEBASE = TIMEBASE_VALUE; // Needed for the ADC
     iopins_init();
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
-    usart0_init(460800);
+    usart0_init(230400);
     spi0_init();
     // 2024-03-29 Change to a less chatty mode where the AVR only outputs
     // text in response to incoming commands.
