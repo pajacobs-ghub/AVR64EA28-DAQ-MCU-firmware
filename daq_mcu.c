@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.13 AVR64EA28 DAQ-MCU 2024-03-29"
+#define VERSION_STR "v0.14 AVR64EA28 DAQ-MCU 2024-04-02"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -708,6 +708,13 @@ int main(void)
     // 2024-03-29 Change to a less chatty mode where the AVR only outputs
     // text in response to incoming commands.
     restore_registers_from_EEPROM();
+    // Flash the Green LED twice to signal that the MCU is ready.
+    for (int8_t i=0; i < 2; ++i) {
+        sampling_LED_ON();
+        _delay_ms(250);
+        sampling_LED_OFF();
+        _delay_ms(250);
+    }
     //
     // The basic behaviour is to be forever checking for a text command.
     while (1) {
