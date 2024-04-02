@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.14 AVR64EA28 DAQ-MCU 2024-04-02"
+#define VERSION_STR "v0.15 AVR64EA28 DAQ-MCU 2024-04-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -46,6 +46,7 @@ int16_t res[MAXNCHAN];
 
 // State of play is indicated by these flags.
 uint32_t next_byte_addr_in_SRAM;
+uint8_t byte_addr_has_wrapped_around;
 uint8_t busy_n;
 uint8_t event_n;
 
@@ -177,8 +178,8 @@ void set_registers_to_original_values()
     vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
     vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
     vregister[7] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
-    vregister[8] = 0;    // PGA gain 0=8X
-    vregister[9] = 0;    // V_REF 0=1.024V
+    vregister[8] = 0;    // PGA gain 0=1X,1=2X,2=4X,3=8X,4=16X
+    vregister[9] = 0;    // V_REF 0=1.024V,1=2.048V,3=4.096V
     // The first 6 channels (0 through 5) default to differential inputs,
     // spread across the full set of 12 analog pins.
     // This is expected to be the usual arrangement.
@@ -278,10 +279,37 @@ void adc0_init(void)
     // Set up the ADC
     ADC0.CTRLA |= ADC_LOWLAT_bm | ADC_ENABLE_bm;
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
-    ADC0.CTRLC = ADC_REFSEL_1V024_gc;
+    switch (vregister[9]) {
+        case 0:
+            ADC0.CTRLC = ADC_REFSEL_1V024_gc;
+            break;
+        case 1:
+            ADC0.CTRLC = ADC_REFSEL_2V048_gc;
+            break;
+        case 2:
+            ADC0.CTRLC = ADC_REFSEL_4V096_gc;
+            break;
+        default:
+            ADC0.CTRLC = ADC_REFSEL_4V096_gc;            
+    }
     ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
     ADC0.CTRLF |= ADC_SAMPNUM_NONE_gc;
-    ADC0.PGACTRL = ADC_GAIN_8X_gc | ADC_PGABIASSEL_100PCT_gc | ADC_PGAEN_bm;
+    uint8_t gain_gc = ADC_GAIN_1X_gc;
+    switch (vregister[8]) {
+        case 0:
+            gain_gc = ADC_GAIN_1X_gc;
+        case 1:
+            gain_gc = ADC_GAIN_2X_gc;
+        case 2:
+            gain_gc = ADC_GAIN_4X_gc;
+        case 3:
+            gain_gc = ADC_GAIN_8X_gc;
+        case 4:
+            gain_gc = ADC_GAIN_16X_gc;
+        default:
+            gain_gc = ADC_GAIN_1X_gc;
+    }
+    ADC0.PGACTRL = gain_gc | ADC_PGABIASSEL_100PCT_gc | ADC_PGAEN_bm;
     while (ADC0.STATUS & ADC_ADCBUSY_bm) { /* wait for settling */ }
 } // end adc0_init()
 
@@ -365,6 +393,7 @@ void sample_channels(void)
     release_event_pin();
     adc0_init();
     next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
+    byte_addr_has_wrapped_around = 0;
     uint8_t post_event = 0;
     uint16_t samples_remaining = (uint16_t)vregister[2];
     timerA0_init(ticks); // period=ticks*0.8us
@@ -384,8 +413,11 @@ void sample_channels(void)
         spi0_send_sample_data(res, n_chan, next_byte_addr_in_SRAM);
         // Point to the next available SRAM address.
         next_byte_addr_in_SRAM += byte_addr_incr;
-        // Wrap around at 128kB, assuming one SRAM chip.
-        next_byte_addr_in_SRAM &= 0x0001FFFFUL;
+        if (next_byte_addr_in_SRAM >= 0x00020000) {
+            // Wrap around at 128kB, assuming one SRAM chip.
+            next_byte_addr_in_SRAM &= 0x0001FFFFUL;
+            byte_addr_has_wrapped_around = 1;
+        }
         sampling_LED_OFF();
         //
         if (post_event) {
@@ -423,15 +455,23 @@ char str_buf1[NSTRBUF1];
 #define NSTRBUF2 16
 char str_buf2[NSTRBUF2];
 
+uint32_t oldest_byte_addr_in_SRAM()
+{
+    return (byte_addr_has_wrapped_around) ? next_byte_addr_in_SRAM : 0;
+}
+
 char* sample_set_to_str(uint16_t n)
 {
     int nchar;
     uint8_t n_chan = (uint8_t)vregister[1];
-    uint8_t mode = (uint8_t)vregister[3];
     // Start with address of oldest sample, then move to selected sample.
-    uint32_t addr = (mode == TRIGGER_IMMEDIATE) ? 0 : next_byte_addr_in_SRAM;
+    uint32_t addr = oldest_byte_addr_in_SRAM();
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     addr += byte_addr_incr * n;
+    if (addr >= 0x00020000) {
+        // Wrap around at 128kB, assuming one SRAM chip.
+        addr &= 0x0001FFFFUL;
+    }
     spi0_fetch_sample_data(res, n_chan, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%6d", res[0]);
     for (uint8_t i=1; i < n_chan; i++) {
@@ -609,8 +649,7 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'a': {
-            uint8_t mode = (uint8_t)vregister[3];
-            uint32_t addr = (mode == 0) ? 0 : next_byte_addr_in_SRAM;
+            uint32_t addr = oldest_byte_addr_in_SRAM();
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", addr);
             usart0_putstr(str_buf); }
             break;
@@ -672,8 +711,8 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " 5  trigger level as an 11-bit count, 0-2047\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 6  trigger slope 0=below-level, 1=above-level\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 7  PGA flag for all channels, 0=direct 1=via_PGA\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, " 8  PGA gain 0=8X\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, " 9  V_REF 0=1.024V\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 8  PGA gain 0=1X, 1=2X, 2=4X, 3=8X, 4=16X\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 9  V_REF 0=1.024V, 1=2.048V, 2=4.096V\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 10 CH0+   22 CH6+\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 11 CH0-   23 CH6-\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 12 CH1+   24 CH7+\n"); usart0_putstr(str_buf);
