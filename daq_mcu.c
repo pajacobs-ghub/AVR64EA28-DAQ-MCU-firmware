@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.15 AVR64EA28 DAQ-MCU 2024-04-03"
+#define VERSION_STR "v0.16 AVR64EA28 DAQ-MCU 2024-04-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -450,6 +450,25 @@ void sample_channels(void)
     adc0_close();
 } // end void sample_channels()
 
+void sample_channels_once()
+{
+    // We temporarily override some of the registers to make this happen.
+    uint16_t ticks_save = (uint16_t)vregister[0];
+    uint8_t mode_save = (uint8_t)vregister[3];
+    uint16_t samples_remaining_save = (uint16_t)vregister[2];
+    //
+    vregister[0] = (uint16_t)200; // Time enough to do a full scan.
+    vregister[3] = 0; // Immediate mode.
+    vregister[2] = 1; // One sample set.
+    sample_channels();
+    //
+    // Restore register values.
+    vregister[0] = ticks_save;
+    vregister[3] = mode_save;
+    vregister[2] = samples_remaining_save;
+    return;
+}
+
 #define NSTRBUF1 128
 char str_buf1[NSTRBUF1];
 #define NSTRBUF2 16
@@ -623,6 +642,7 @@ void interpret_command()
             release_busy_pin();
             break;
         case 'G':
+            // Immediately take many samples and (eventually) report values.
             if (allow_multiline_response) {
                 nchar = snprintf(str_buf, NSTRBUF, "ok\n");
                 usart0_putstr(str_buf);
@@ -636,6 +656,12 @@ void interpret_command()
                 nchar = snprintf(str_buf, NSTRBUF, "fail: Action not available.\n");
                 usart0_putstr(str_buf);                
             }
+            break;
+        case 'I':
+            // Immediately take a single sample set and report values.
+            sample_channels_once();
+            nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(0));
+            usart0_putstr(str_buf);
             break;
         case 'P':
             token_ptr = strtok(&cmd_buf[1], sep_tok);
@@ -696,6 +722,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " F      set register values to original values\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " g      go and start sampling (no report)\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " G      go and start sampling, and then report\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " I      sample channels once and report\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " P <i>  report sample set i (i=0 for oldest data)\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " M <i>  dump SRAM memory from byte address i\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " a      report byte address of oldest data\n"); usart0_putstr(str_buf);
