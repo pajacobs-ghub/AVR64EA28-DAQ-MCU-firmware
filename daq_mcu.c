@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.16 AVR64EA28 DAQ-MCU 2024-04-03"
+#define VERSION_STR "v0.17 AVR64EA28 DAQ-MCU 2024-04-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -44,7 +44,11 @@ char cmd_buf[NCMDBUF];
 #define MAXNCHAN 12
 int16_t res[MAXNCHAN];
 
-// State of play is indicated by these flags.
+// State of play is indicated by the following data flags.
+// Assume that one 23LC1024 chip is present, with 128kB memory.
+// At some point in time, we should write code to probe the 
+// external memory chips to see how many are actually present.
+uint32_t size_of_SRAM_in_bytes = 0x00020000UL; // must be a power of 2
 uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
 uint8_t busy_n;
@@ -346,8 +350,7 @@ uint16_t max_n_samples(void)
 {
     uint8_t n_chan = (uint8_t)vregister[1];
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
-    // Assume that one 23LC1024 chip is present, with 128kB memory.
-    return 0x00020000UL / byte_addr_incr;
+    return size_of_SRAM_in_bytes / byte_addr_incr;
 }
 
 void sample_channels(void)
@@ -413,9 +416,8 @@ void sample_channels(void)
         spi0_send_sample_data(res, n_chan, next_byte_addr_in_SRAM);
         // Point to the next available SRAM address.
         next_byte_addr_in_SRAM += byte_addr_incr;
-        if (next_byte_addr_in_SRAM >= 0x00020000) {
-            // Wrap around at 128kB, assuming one SRAM chip.
-            next_byte_addr_in_SRAM &= 0x0001FFFFUL;
+        if (next_byte_addr_in_SRAM >= size_of_SRAM_in_bytes) {
+            next_byte_addr_in_SRAM -= size_of_SRAM_in_bytes;
             byte_addr_has_wrapped_around = 1;
         }
         sampling_LED_OFF();
@@ -487,9 +489,10 @@ char* sample_set_to_str(uint16_t n)
     uint32_t addr = oldest_byte_addr_in_SRAM();
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     addr += byte_addr_incr * n;
-    if (addr >= 0x00020000) {
-        // Wrap around at 128kB, assuming one SRAM chip.
-        addr &= 0x0001FFFFUL;
+    if (addr >= size_of_SRAM_in_bytes) {
+        // Assume that the size is a power of two, so that
+        // subtracting 1 gives us a bit mask of the valid address bits.
+        addr &= (size_of_SRAM_in_bytes - 1);
     }
     spi0_fetch_sample_data(res, n_chan, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%6d", res[0]);
@@ -684,9 +687,13 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", bincr);
             usart0_putstr(str_buf); }
             break;
-        case 'm': {
+        case 'm':
             nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", max_n_samples());
-            usart0_putstr(str_buf); }
+            usart0_putstr(str_buf);
+            break;
+        case 'T':
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", size_of_SRAM_in_bytes);
+            usart0_putstr(str_buf);
             break;
         case 'M':
             token_ptr = strtok(&cmd_buf[1], sep_tok);
@@ -728,6 +735,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " a      report byte address of oldest data\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " b      report size of a sample set in bytes\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " m      report max number of samples in SRAM\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " T      report size of SRAM in bytes\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "Registers:\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 0  sample period in timer ticks (0.8us ticks)\n"); usart0_putstr(str_buf);
