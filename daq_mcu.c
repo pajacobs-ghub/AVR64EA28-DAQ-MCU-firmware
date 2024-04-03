@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.17 AVR64EA28 DAQ-MCU 2024-04-03"
+#define VERSION_STR "v0.18 AVR64EA28 DAQ-MCU 2024-04-03"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -48,7 +48,8 @@ int16_t res[MAXNCHAN];
 // Assume that one 23LC1024 chip is present, with 128kB memory.
 // At some point in time, we should write code to probe the 
 // external memory chips to see how many are actually present.
-uint32_t size_of_SRAM_in_bytes = 0x00020000UL; // must be a power of 2
+uint32_t size_of_SRAM_in_bytes = 0x00020000UL;
+uint32_t mask_for_SRAM_addr = 0x0001FFFFUL;
 uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
 uint8_t busy_n;
@@ -302,14 +303,19 @@ void adc0_init(void)
     switch (vregister[8]) {
         case 0:
             gain_gc = ADC_GAIN_1X_gc;
+            break;
         case 1:
             gain_gc = ADC_GAIN_2X_gc;
+            break;
         case 2:
             gain_gc = ADC_GAIN_4X_gc;
+            break;
         case 3:
             gain_gc = ADC_GAIN_8X_gc;
+            break;
         case 4:
             gain_gc = ADC_GAIN_16X_gc;
+            break;
         default:
             gain_gc = ADC_GAIN_1X_gc;
     }
@@ -346,7 +352,7 @@ uint8_t byte_addr_increment(uint8_t n_chan)
     return 32;
 }
 
-uint16_t max_n_samples(void)
+uint32_t max_n_samples(void)
 {
     uint8_t n_chan = (uint8_t)vregister[1];
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
@@ -481,7 +487,7 @@ uint32_t oldest_byte_addr_in_SRAM()
     return (byte_addr_has_wrapped_around) ? next_byte_addr_in_SRAM : 0;
 }
 
-char* sample_set_to_str(uint16_t n)
+char* sample_set_to_str(uint32_t n)
 {
     int nchar;
     uint8_t n_chan = (uint8_t)vregister[1];
@@ -489,15 +495,13 @@ char* sample_set_to_str(uint16_t n)
     uint32_t addr = oldest_byte_addr_in_SRAM();
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     addr += byte_addr_incr * n;
-    if (addr >= size_of_SRAM_in_bytes) {
-        // Assume that the size is a power of two, so that
-        // subtracting 1 gives us a bit mask of the valid address bits.
-        addr &= (size_of_SRAM_in_bytes - 1);
-    }
+    // Assume that the size of SRAM is a power of two, so that
+    // a bit mask can be used for the valid address bits.
+    addr &= mask_for_SRAM_addr;
     spi0_fetch_sample_data(res, n_chan, addr);
-    nchar = snprintf(str_buf1, NSTRBUF1, "%6d", res[0]);
+    nchar = snprintf(str_buf1, NSTRBUF1, "%d", res[0]);
     for (uint8_t i=1; i < n_chan; i++) {
-        nchar = snprintf(str_buf2, NSTRBUF2, " %6d", res[i]);
+        nchar = snprintf(str_buf2, NSTRBUF2, " %d", res[i]);
         strncat(str_buf1, str_buf2, NSTRBUF2);
     }
     return str_buf1;
@@ -523,10 +527,10 @@ void report_values(void)
 // Assume a simple sampling process with immediate event.
 {
     uint8_t mode = (uint8_t)vregister[3];
-    uint16_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint16_t)vregister[2] : max_n_samples();
+    uint32_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint32_t)vregister[2] : max_n_samples();
     int nchar;
-    for (uint16_t i = 0; i < n_sample; i++) {
-        nchar = snprintf(str_buf, NSTRBUF, "i=%6d data=%s\n", i, sample_set_to_str(i));
+    for (uint32_t i = 0; i < n_sample; i++) {
+        nchar = snprintf(str_buf, NSTRBUF, "i=%6lu data=%s\n", i, sample_set_to_str(i));
         usart0_putstr(str_buf);
     }
 } // end void report_values()
@@ -670,8 +674,8 @@ void interpret_command()
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume sample index.
-                i = (uint16_t) atoi(token_ptr);
-                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(i));
+                uint32_t ii = (uint32_t) atol(token_ptr);
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(ii));
             } else {
                 nchar = snprintf(str_buf, NSTRBUF, "fail: No index given.\n");
             }
@@ -688,7 +692,7 @@ void interpret_command()
             usart0_putstr(str_buf); }
             break;
         case 'm':
-            nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", max_n_samples());
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", max_n_samples());
             usart0_putstr(str_buf);
             break;
         case 'T':
