@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.18 AVR64EA28 DAQ-MCU 2024-04-03"
+#define VERSION_STR "v0.19 AVR64EA28 DAQ-MCU 2024-04-05"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -48,8 +48,15 @@ int16_t res[MAXNCHAN];
 // Assume that one 23LC1024 chip is present, with 128kB memory.
 // At some point in time, we should write code to probe the 
 // external memory chips to see how many are actually present.
+// #define TWO_SRAM_CHIPS
+#ifdef TWO_SRAM_CHIPS
+uint32_t size_of_SRAM_in_bytes = 0x00040000UL;
+uint32_t mask_for_SRAM_addr = 0x0003FFFFUL;
+#else
 uint32_t size_of_SRAM_in_bytes = 0x00020000UL;
 uint32_t mask_for_SRAM_addr = 0x0001FFFFUL;
+#endif
+
 uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
 uint8_t busy_n;
@@ -710,6 +717,11 @@ void interpret_command()
             }
             usart0_putstr(str_buf);
             break;
+        case 'z':
+            release_event_pin();
+            nchar = snprintf(str_buf, NSTRBUF, "ok\n");
+            usart0_putstr(str_buf);
+            break;
         case 'h':
         case '?':
             if (!allow_multiline_response) {
@@ -740,6 +752,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " b      report size of a sample set in bytes\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " m      report max number of samples in SRAM\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " T      report size of SRAM in bytes\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " z      release EVENTn line\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "Registers:\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 0  sample period in timer ticks (0.8us ticks)\n"); usart0_putstr(str_buf);
