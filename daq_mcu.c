@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.19 AVR64EA28 DAQ-MCU 2024-04-05"
+#define VERSION_STR "v0.20 AVR64EA28 DAQ-MCU 2024-04-06"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -293,13 +293,19 @@ void adc0_init(void)
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
     switch (vregister[9]) {
         case 0:
-            ADC0.CTRLC = ADC_REFSEL_1V024_gc;
+            ADC0.CTRLC = ADC_REFSEL_VDD_gc;
             break;
         case 1:
-            ADC0.CTRLC = ADC_REFSEL_2V048_gc;
+            ADC0.CTRLC = ADC_REFSEL_1V024_gc;
             break;
         case 2:
+            ADC0.CTRLC = ADC_REFSEL_2V048_gc;
+            break;
+        case 3:
             ADC0.CTRLC = ADC_REFSEL_4V096_gc;
+            break;
+        case 4:
+            ADC0.CTRLC = ADC_REFSEL_2V500_gc;
             break;
         default:
             ADC0.CTRLC = ADC_REFSEL_4V096_gc;            
@@ -764,7 +770,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " 6  trigger slope 0=below-level, 1=above-level\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 7  PGA flag for all channels, 0=direct 1=via_PGA\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 8  PGA gain 0=1X, 1=2X, 2=4X, 3=8X, 4=16X\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, " 9  V_REF 0=1.024V, 1=2.048V, 2=4.096V\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " 9  V_REF 0=VDD, 1=1V024, 2=2V048, 3=4V096, 4=2V500\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 10 CH0+   22 CH6+\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 11 CH0-   23 CH6-\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " 12 CH1+   24 CH7+\n"); usart0_putstr(str_buf);
