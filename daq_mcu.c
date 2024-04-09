@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.20 AVR64EA28 DAQ-MCU 2024-04-06"
+#define VERSION_STR "v0.21 AVR64EA28 DAQ-MCU 2024-04-09"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -525,6 +525,7 @@ uint8_t bytes[NBYTES];
 
 char* mem_dump_to_str(uint32_t addr)
 {
+    // Write a 32-byte page of SRAM data into the buffer as pairs of hex digits.
     int nchar;
     spi0_fetch_bytes(bytes, NBYTES, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%02x", bytes[0]);
@@ -564,24 +565,35 @@ void interpret_command()
     // usart0_putstr(str_buf);
     switch (cmd_buf[0]) {
         case 'v':
+            // Report the version string (see top of source file)
             nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", VERSION_STR);
             usart0_putstr(str_buf);
             break;
         case 'n':
+            // Report number of virtual registers.
             nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", NUMREG);
             usart0_putstr(str_buf);
             break;
         case 'Q':
+            // Set the reporting mode to allow multi-line responses.
+            // This is really only useful when interacting with the AVR 
+            // through a TTL-232-5V serial cable.
+            // The RS484 COMMS-MCU expects single-line responses.
             allow_multiline_response = 1;
             nchar = snprintf(str_buf, NSTRBUF, "Multi-line response mode. ok\n");
             usart0_putstr(str_buf);
             break;
         case 'q':
+            // Set the reporting mode to single-line responses.
+            // This is the default mode and the one intended for interaction
+            // via the RS485 COMMS-MCU.
             allow_multiline_response = 0;
             nchar = snprintf(str_buf, NSTRBUF, "Single-line response mode. ok\n");
             usart0_putstr(str_buf);
             break;
         case 'p':
+            // Print all virtual register values.
+            // Should not be used via the RS485 COMMS-MCU.
             if (allow_multiline_response) {
                 nchar = snprintf(str_buf, NSTRBUF, "Register values:\n");
                 usart0_putstr(str_buf);
@@ -597,7 +609,7 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'r':
-            // Report a register value.
+            // Report a selected register value.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume register number.
@@ -614,7 +626,7 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 's':
-            // Set a register value.
+            // Set a selected register value.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text; assume register number.
@@ -638,21 +650,29 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'R':
+            // Read all of the virtual register values from the AVR's EEPROM.
             restore_registers_from_EEPROM();
             nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'S':
+            // Save all of the current values from the virtual registers
+            // to the AVR's on-chip EEPROM.
             save_registers_to_EEPROM();
             nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'F':
+            // Set the values of the registers to those values hard-coded
+            // into this firmware.  A factory default, so to speak.
             set_registers_to_original_values();
             nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             break;
         case 'g':
+            // Start the sampling process.
+            // What happens next, and when it happens, depends on the
+            // register settings and external signals.
             nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
             // The task takes an indefinite time,
@@ -663,6 +683,7 @@ void interpret_command()
             break;
         case 'G':
             // Immediately take many samples and (eventually) report values.
+            // Not to be used with the RS485 COMMS-MCU.
             if (allow_multiline_response) {
                 nchar = snprintf(str_buf, NSTRBUF, "ok\n");
                 usart0_putstr(str_buf);
@@ -684,6 +705,8 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'P':
+            // Report the selected sample set for the configured channels.
+            // An index of 0 refers to the oldest sample set.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume sample index.
@@ -695,24 +718,30 @@ void interpret_command()
             usart0_putstr(str_buf);
             break;
         case 'a': {
+            // Report the byte-address in SRAM of the oldest sample set.
             uint32_t addr = oldest_byte_addr_in_SRAM();
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", addr);
             usart0_putstr(str_buf); }
             break;
         case 'b': {
+            // Report the number of bytes in SRAM for each sample set.
             uint16_t bincr = byte_addr_increment((uint8_t)vregister[1]);
             nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", bincr);
             usart0_putstr(str_buf); }
             break;
         case 'm':
+            // Report the maximum number of sample seta that the SRAM can hold.
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", max_n_samples());
             usart0_putstr(str_buf);
             break;
         case 'T':
+            // Report the total number of bytes in the SRAM chips.
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", size_of_SRAM_in_bytes);
             usart0_putstr(str_buf);
             break;
         case 'M':
+            // Report the content of a 32-byte 'page' in SRAM,
+            // starting at the specified byte address.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume address.
@@ -723,7 +752,15 @@ void interpret_command()
             }
             usart0_putstr(str_buf);
             break;
+        case 'N':
+            // Report the total number of 32-byte pages in the SRAM chips.
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", size_of_SRAM_in_bytes/32);
+            usart0_putstr(str_buf);
+            break;
         case 'z':
+            // Release the EVENT# line.
+            // Presumably this line has been help low following an internal
+            // trigger event during the sampling process.
             release_event_pin();
             nchar = snprintf(str_buf, NSTRBUF, "ok\n");
             usart0_putstr(str_buf);
@@ -757,7 +794,8 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " a      report byte address of oldest data\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " b      report size of a sample set in bytes\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " m      report max number of samples in SRAM\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, " T      report size of SRAM in bytes\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " T      report total size of SRAM in bytes\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " N      report total number of 32-bit pages in SRAM\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " z      release EVENTn line\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, "Registers:\n"); usart0_putstr(str_buf);
