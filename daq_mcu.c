@@ -46,7 +46,7 @@ int16_t res[MAXNCHAN];
 
 // State of play is indicated by the following data flags.
 // Assume that one 23LC1024 chip is present, with 128kB memory.
-// At some point in time, we should write code to probe the 
+// At some point in time, we should write code to probe the
 // external memory chips to see how many are actually present.
 // #define TWO_SRAM_CHIPS
 #ifdef TWO_SRAM_CHIPS
@@ -309,7 +309,7 @@ void adc0_init(void)
             ADC0.CTRLC = ADC_REFSEL_2V500_gc;
             break;
         default:
-            ADC0.CTRLC = ADC_REFSEL_4V096_gc;            
+            ADC0.CTRLC = ADC_REFSEL_4V096_gc;
     }
     ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
     ADC0.CTRLF |= ADC_SAMPNUM_NONE_gc;
@@ -592,7 +592,7 @@ void interpret_command()
             break;
         case 'Q':
             // Set the reporting mode to allow multi-line responses.
-            // This is really only useful when interacting with the AVR 
+            // This is really only useful when interacting with the AVR
             // through a TTL-232-5V serial cable.
             // The RS484 COMMS-MCU expects single-line responses.
             allow_multiline_response = 1;
@@ -711,7 +711,7 @@ void interpret_command()
                 release_busy_pin();
             } else {
                 nchar = snprintf(str_buf, NSTRBUF, "fail: Action not available.\n");
-                usart0_putstr(str_buf);                
+                usart0_putstr(str_buf);
             }
             break;
         case 'k':
