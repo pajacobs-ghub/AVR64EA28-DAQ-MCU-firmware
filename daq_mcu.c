@@ -11,7 +11,7 @@
 //            Changed to using new-line character at end of output messages.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.21 AVR64EA28 DAQ-MCU 2024-04-09"
+#define VERSION_STR "v0.22 AVR64EA28 DAQ-MCU 2024-04-12"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -61,6 +61,7 @@ uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
 uint8_t busy_n;
 uint8_t event_n;
+uint8_t did_not_keep_up_during_sampling;
 
 static inline void assert_event_pin()
 {
@@ -418,11 +419,15 @@ void sample_channels(void)
     byte_addr_has_wrapped_around = 0;
     uint8_t post_event = 0;
     uint16_t samples_remaining = (uint16_t)vregister[2];
+    did_not_keep_up_during_sampling = 0; // Presume that we will be fast enough.
     timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
     //
     while (samples_remaining > 0) {
         sampling_LED_ON();
+        // Following flag will be set to 0 if we finish sampling before timerA0 overflows.
+        uint8_t late_flag = 1;
+        // Take the analog sample set.
         for (uint8_t ch=0; ch < n_chan; ch++) {
             // Select ADC channel and make the conversion.
             ADC0.MUXPOS = muxpos_bits[ch];
@@ -465,7 +470,18 @@ void sample_channels(void)
                 }
             } // end switch
         }
-        timerA0_wait();
+        // timerA0_wait(); Expanded this function into the following lines.
+        // Wait for timerA0 overflow.
+        while (!(TCA0.SINGLE.INTFLAGS & TCA_SINGLE_OVF_bm)) {
+            // __builtin_avr_wdr();
+            // We have arrived before the timer overflowed for this sample period.
+            late_flag = 0;
+        }
+        // We reset the interrupt flag for the timer but leave the timer ticking
+        // so that we have accurate periods.
+        TCA0.SINGLE.INTFLAGS |= TCA_SINGLE_OVF_bm;
+        // If we arrive late for the timer, for even one sample set, set the global flag.
+        if (late_flag) did_not_keep_up_during_sampling = 1;
     } // end while
     timerA0_close();
     adc0_close();
@@ -698,6 +714,11 @@ void interpret_command()
                 usart0_putstr(str_buf);                
             }
             break;
+        case 'k':
+            // Report the value of the keeping-up flag.
+            nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", did_not_keep_up_during_sampling);
+            usart0_putstr(str_buf);
+            break;
         case 'I':
             // Immediately take a single sample set and report values.
             sample_channels_once();
@@ -788,6 +809,7 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " F      set register values to original values\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " g      go and start sampling (no report)\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " G      go and start sampling, and then report\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " k      report flag did_not_keep_up_during_sampling\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " I      sample channels once and report\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " P <i>  report sample set i (i=0 for oldest data)\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " M <i>  dump SRAM memory from byte address i\n"); usart0_putstr(str_buf);
@@ -840,8 +862,6 @@ int main(void)
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
     usart0_init(230400);
     spi0_init();
-    // 2024-03-29 Change to a less chatty mode where the AVR only outputs
-    // text in response to incoming commands.
     restore_registers_from_EEPROM();
     // Flash the Green LED twice to signal that the MCU is ready.
     for (int8_t i=0; i < 2; ++i) {
@@ -850,6 +870,7 @@ int main(void)
         sampling_LED_OFF();
         _delay_ms(250);
     }
+    did_not_keep_up_during_sampling = 0;
     //
     // The basic behaviour is to be forever checking for a text command.
     while (1) {
