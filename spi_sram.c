@@ -51,6 +51,10 @@ void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr)
 // data : array of values to send
 // n    : number of data elements to send
 // addr : starting byte address within SRAM chip
+//
+// Note that we store the 16-bit data into the external SRAM with
+// big-endian byte order.  This gives an easy-to-read byte stream
+// when formatted in hexadecimal. 
 {
     uint8_t b1, b2;
     if (n == 0) return; // Nothing to do.

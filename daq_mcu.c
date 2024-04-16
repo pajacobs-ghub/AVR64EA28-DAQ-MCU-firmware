@@ -542,6 +542,7 @@ uint8_t bytes[NBYTES];
 char* mem_dump_to_str(uint32_t addr)
 {
     // Write a 32-byte page of SRAM data into the buffer as pairs of hex digits.
+    // [TODO] Consider adding a check-sum to this string.
     int nchar;
     spi0_fetch_bytes(bytes, NBYTES, addr);
     nchar = snprintf(str_buf1, NSTRBUF1, "%02x", bytes[0]);
