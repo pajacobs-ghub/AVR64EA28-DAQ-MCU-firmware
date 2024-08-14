@@ -9,9 +9,10 @@
 // 2023-12-03 EEPROM code for saving and restoring config register values.
 // 2024-03-29 Less chatty mode for interfacing with PIC18 COMMS-MCU.
 //            Changed to using new-line character at end of output messages.
+// 2024-08-13 Allow burst-mode sampling to reduce noise in measurements.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.22 AVR64EA28 DAQ-MCU 2024-04-12"
+#define VERSION_STR "v0.23 AVR64EA28 DAQ-MCU 2024-08-13"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -141,7 +142,7 @@ const uint8_t muxneg_pin[] = {
 };
 
 // Parameters controlling the device are stored in virtual config registers.
-#define NUMREG 34
+#define NUMREG 35
 int16_t vregister[NUMREG]; // working copy in SRAM
 
 const char hint[NUMREG][12] = {
@@ -178,7 +179,8 @@ const char hint[NUMREG][12] = {
     "CH10+",     // 30
     "CH10-",     // 31
     "CH11+",     // 32
-    "CH11-"      // 33
+    "CH11-",     // 33
+    "NBURST"     // 34
 };
 
 void set_registers_to_original_values()
@@ -225,6 +227,7 @@ void set_registers_to_original_values()
     vregister[31] = muxneg_pin[12]; // CH10- = GND by default
     vregister[32] = muxpos_pin[11]; // CH11+ = PD7 by default
     vregister[33] = muxneg_pin[12]; // CH11- = GND by default
+    vregister[34] = ADC_SAMPNUM_NONE_gc; // Single-sample conversion
 }
 
 
@@ -289,7 +292,9 @@ void iopins_init(void)
 
 void adc0_init(void)
 {
-    // Set up the ADC
+    // Set up the ADC for low-latency conversion.
+    // Once we start conversions, we will likely want to make
+    // subsequent conversions quickly.
     ADC0.CTRLA |= ADC_LOWLAT_bm | ADC_ENABLE_bm;
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
     switch (vregister[9]) {
@@ -312,7 +317,16 @@ void adc0_init(void)
             ADC0.CTRLC = ADC_REFSEL_4V096_gc;
     }
     ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
-    ADC0.CTRLF |= ADC_SAMPNUM_NONE_gc;
+    //
+    // The number of samples converted in burst mode is 2^^sampnum.
+    uint8_t sampnum = (uint8_t)vregister[34];
+    if (sampnum > 0x0A) sampnum = 0x0A;
+    if (sampnum == 0) {
+        ADC0.CTRLF = ADC_SAMPNUM_NONE_gc;
+    } else {
+        ADC0.CTRLF = ADC_CHOPPING_bm | ADC_FREERUN_bm | sampnum;
+    }
+    //
     uint8_t gain_gc = ADC_GAIN_1X_gc;
     switch (vregister[8]) {
         case 0:
@@ -415,6 +429,16 @@ void sample_channels(void)
     //
     release_event_pin();
     adc0_init();
+    // Default to single sample for each conversion.
+    uint8_t adc_cmd = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
+    if ((uint8_t)vregister[34] > 0) {
+        // Burst-mode sampling with scaling, such that we have to only pick up
+        // a 16-bit result.  The results are an accumulation of the sample values
+        // and will be scaled such that they are 16 times larger than the raw
+        // 12-bit sample, even if fewer than 16 samples were accumulated.
+        // See Table 31-3 in the data sheet.
+        adc_cmd = ADC_DIFF_bm | ADC_MODE_BURST_SCALING_gc | ADC_START_IMMEDIATE_gc;
+    }
     next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
     byte_addr_has_wrapped_around = 0;
     uint8_t post_event = 0;
@@ -432,9 +456,10 @@ void sample_channels(void)
             // Select ADC channel and make the conversion.
             ADC0.MUXPOS = muxpos_bits[ch];
             ADC0.MUXNEG = muxneg_bits[ch];
-            ADC0.COMMAND = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
-            while (!(ADC0.INTFLAGS & ADC_SAMPRDY_bm)) { /* wait */ }
-            res[ch] = ADC0.SAMPLE; // 16-bit value
+            ADC0.COMMAND = adc_cmd;
+            while (!(ADC0.INTFLAGS & ADC_RESRDY_bm)) { /* wait */ }
+            ADC0.COMMAND = ADC_START_STOP_gc;
+            res[ch] = (int16_t)ADC0.RESULT; // 16-bit value only
         }
         // Save the sample for later.
         spi0_send_sample_data(res, n_chan, next_byte_addr_in_SRAM);
