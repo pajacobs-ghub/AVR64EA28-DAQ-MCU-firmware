@@ -777,7 +777,7 @@ void interpret_command()
             usart0_putstr(str_buf); }
             break;
         case 'm':
-            // Report the maximum number of sample seta that the SRAM can hold.
+            // Report the maximum number of sample sets that the SRAM can hold.
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", max_n_samples());
             usart0_putstr(str_buf);
             break;
