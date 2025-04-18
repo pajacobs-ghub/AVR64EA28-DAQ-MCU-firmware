@@ -10,9 +10,10 @@
 // 2024-03-29 Less chatty mode for interfacing with PIC18 COMMS-MCU.
 //            Changed to using new-line character at end of output messages.
 // 2024-08-13 Allow burst-mode sampling to reduce noise in measurements.
+// 2024-04-18 Probe for the installed SRAM chips.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.23 AVR64EA28 DAQ-MCU 2024-08-13"
+#define VERSION_STR "v0.24 AVR64EA28 DAQ-MCU 2025-04-18"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -45,18 +46,11 @@ char cmd_buf[NCMDBUF];
 #define MAXNCHAN 12
 int16_t res[MAXNCHAN];
 
-// State of play is indicated by the following data flags.
-// Assume that one 23LC1024 chip is present, with 128kB memory.
-// At some point in time, we should write code to probe the
-// external memory chips to see how many are actually present.
-// #define TWO_SRAM_CHIPS
-#ifdef TWO_SRAM_CHIPS
-uint32_t size_of_SRAM_in_bytes = 0x00040000UL;
-uint32_t mask_for_SRAM_addr = 0x0003FFFFUL;
-#else
-uint32_t size_of_SRAM_in_bytes = 0x00020000UL;
-uint32_t mask_for_SRAM_addr = 0x0001FFFFUL;
-#endif
+// Size of memory depends on the number of 23LC1024 chips present, 
+// each providing 128kB memory. At start-up, we probe the memory chips
+// to see how many are actually present and set the following variables.
+uint32_t size_of_SRAM_in_bytes = 0x0UL;
+uint32_t mask_for_SRAM_addr = 0x0UL;
 
 uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
@@ -888,6 +882,18 @@ int main(void)
     _delay_ms(10); // Let the pins settle, to reduce garbage on the RX pin.
     usart0_init(230400);
     spi0_init();
+    uint8_t chips = detect_SRAM_chips();
+    if (0x03 == chips) {
+        size_of_SRAM_in_bytes = 0x00040000UL;
+        mask_for_SRAM_addr = 0x0003FFFFUL;
+    } else if (0x01 == chips) {
+        size_of_SRAM_in_bytes = 0x00020000UL;
+        mask_for_SRAM_addr = 0x0001FFFFUL;
+    } else {
+        // Invalid SRAM chip configuration.
+        size_of_SRAM_in_bytes = 0x0UL;
+        mask_for_SRAM_addr = 0x0UL;
+    }
     restore_registers_from_EEPROM();
     // Flash the Green LED twice to signal that the MCU is ready.
     for (int8_t i=0; i < 2; ++i) {

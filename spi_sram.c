@@ -1,15 +1,17 @@
 // spi_sram.c
 // Send bytes to and retrieve bytes from the external memory.
-// PJ 2023-12-03
+// PJ 2023-12-03 Single-chip implementation
+//    2025-04-18 The time has come to accommodate a second chip.
 //
-// The external memory consists of one 23LC1024-I/P SRAM chip
-// attached to SPI0.  Eventually, we may attach another chip.
+// The external memory consists of one or two 23LC1024-I/P SRAM chips
+// attached to SPI0.  A7 is SSn for chip 0, 
 // With 128kB storage, the byte address within a chip is given
 // by 17 bits.  We could use bit 18 to indicate that we need 
 // to select the second chip, however, we ignore that for the moment.
 //
 // Pin Assignments
-// CS#    == PA7
+// CS_A#  == PA7
+// CS_B#  == PA2
 // 0.SCK  == PA6
 // 0.MISO == PA5
 // 0.MOSI == PA4
@@ -20,8 +22,8 @@
 
 void spi0_init()
 {
-    // Manually drive the SS# pin for the SRAM chip.
-    PORTA.OUTSET |= PIN7_bm;
+    // Manually drive the SS# pins for the SRAM chips.
+    PORTA.OUTSET |= PIN2_bm | PIN7_bm;
     SPI0.CTRLA = SPI_MASTER_bm | SPI_CLK2X_bm | SPI_PRESC_DIV4_gc;
     SPI0.CTRLB = SPI_SSD_bm | SPI_MODE_0_gc;
     SPI0.CTRLA |= SPI_ENABLE_bm;
@@ -47,10 +49,68 @@ void spi0_close()
     SPI0.CTRLA &= ~SPI_ENABLE_bm;
 }
 
+uint8_t detect_SRAM_chips()
+// Return bits 0 and 1 set to indicate presence of SRAM chips.
+{
+    uint8_t chips = 0;
+    uint8_t b1, b2;
+    // Test first chip for 0k <= addr < 128k
+    // Write a two-byte value.
+    PORTA.OUTCLR |= PIN7_bm;
+    b2 = spi0_exchange(0b10); // Write command.
+    b2 = spi0_exchange(0); // to address 0
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0xa);
+    b2 = spi0_exchange(0x5);
+    PORTA.OUTSET |= PIN7_bm;
+    NOP(); NOP(); NOP(); NOP();
+    // and read it back.
+    PORTA.OUTCLR |= PIN7_bm;
+    b2 = spi0_exchange(0b11); // Read command.
+    b2 = spi0_exchange(0); // from address 0
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    b1 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    PORTA.OUTSET |= PIN7_bm;
+    if (b1 == 0xa && b2 == 0x5) {
+        // We have read back the correct values,
+        // So we assume the the first chip is present.
+        chips |= 0x01;
+    }
+    // Test second chip for 128k <= addr < 256k
+    // Write a two-byte value.
+    PORTA.OUTCLR |= PIN2_bm;
+    b2 = spi0_exchange(0b10); // Write command.
+    b2 = spi0_exchange(0); // to address 0
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0xa);
+    b2 = spi0_exchange(0x5);
+    PORTA.OUTSET |= PIN2_bm;
+    NOP(); NOP(); NOP(); NOP();
+    // and read it back.
+    PORTA.OUTCLR |= PIN2_bm;
+    b2 = spi0_exchange(0b11); // Read command.
+    b2 = spi0_exchange(0); // from address 0
+    b2 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    b1 = spi0_exchange(0);
+    b2 = spi0_exchange(0);
+    PORTA.OUTSET |= PIN2_bm;
+    if (b1 == 0xa && b2 == 0x5) {
+        // We have read back the correct values,
+        // So we assume the the first chip is present.
+        chips |= 0x02;
+    }
+    return chips;
+}
+
 void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr)
 // data : array of values to send
 // n    : number of data elements to send
-// addr : starting byte address within SRAM chip
+// addr : starting byte address within the SRAM chips
 //
 // Note that we store the 16-bit data into the external SRAM with
 // big-endian byte order.  This gives an easy-to-read byte stream
@@ -58,7 +118,14 @@ void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr)
 {
     uint8_t b1, b2;
     if (n == 0) return; // Nothing to do.
-    PORTA.OUTCLR |= PIN7_bm;
+    // We select which SRAM chip using bit17 of the provided address.
+    if (addr & 0x00020000UL) {
+        // Select second chip for 128k <= addr < 256k
+        PORTA.OUTCLR |= PIN2_bm;
+    } else {
+        // Select first chip for 0k <= addr < 128k
+        PORTA.OUTCLR |= PIN7_bm;
+    }
     b1 = 0b10; // Write command.
     b2 = spi0_exchange(b1);
     b1 = (uint8_t) (addr >> 16);
@@ -73,7 +140,7 @@ void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr)
         b1 = (uint8_t) (data[i]); // Low byte second.
         b2 = spi0_exchange(b1);
     }
-    PORTA.OUTSET |= PIN7_bm;
+    PORTA.OUTSET |= PIN2_bm | PIN7_bm;
 }
 
 void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr)
@@ -83,7 +150,14 @@ void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr)
 {
     uint8_t b1, b2, b3;
     if (n == 0) return; // Nothing to do.
-    PORTA.OUTCLR |= PIN7_bm;
+    // We select which SRAM chip using bit17 of the provided address.
+    if (addr & 0x00020000UL) {
+        // Select second chip for 128k <= addr < 256k
+        PORTA.OUTCLR |= PIN2_bm;
+    } else {
+        // Select first chip for 0k <= addr < 128k
+        PORTA.OUTCLR |= PIN7_bm;
+    }
     b1 = 0b11; // Read command.
     b2 = spi0_exchange(b1);
     b1 = (uint8_t) (addr >> 16);
@@ -98,7 +172,7 @@ void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr)
         b3 = spi0_exchange(b1); // Low byte second.
         data[i] = (int16_t) ((uint16_t)b2 << 8) | b3;
     }   
-    PORTA.OUTSET |= PIN7_bm;    
+    PORTA.OUTSET |= PIN2_bm | PIN7_bm;    
 }
 
 void spi0_fetch_bytes(uint8_t bytes[], uint8_t n, uint32_t addr)
