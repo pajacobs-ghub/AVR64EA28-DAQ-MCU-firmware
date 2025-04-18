@@ -4,10 +4,9 @@
 //    2025-04-18 The time has come to accommodate a second chip.
 //
 // The external memory consists of one or two 23LC1024-I/P SRAM chips
-// attached to SPI0.  A7 is SSn for chip 0, 
+// attached to SPI0.  PA7 is SSn for chip 0, PA2 is SSn for chip 1. 
 // With 128kB storage, the byte address within a chip is given
-// by 17 bits.  We could use bit 18 to indicate that we need 
-// to select the second chip, however, we ignore that for the moment.
+// by 17 bits.  We use bit 18 to select the second chip.
 //
 // Pin Assignments
 // CS_A#  == PA7
@@ -128,11 +127,11 @@ void spi0_send_sample_data(int16_t data[], uint8_t n, uint32_t addr)
     }
     b1 = 0b10; // Write command.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 16);
+    b1 = (uint8_t) ((addr >> 16) & 0x01); // Upper byte, keep only bit16 of addr.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 8);
+    b1 = (uint8_t) (addr >> 8); // High byte. 
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) addr;
+    b1 = (uint8_t) addr; // Low byte.
     b2 = spi0_exchange(b1);
     for (uint8_t i=0; i < n; i++) {
         b1 = (uint8_t) (data[i] >> 8); // High byte first.
@@ -160,11 +159,11 @@ void spi0_fetch_sample_data(int16_t data[], uint8_t n, uint32_t addr)
     }
     b1 = 0b11; // Read command.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 16);
+    b1 = (uint8_t) ((addr >> 16) & 0x01); // Upper byte, keep only bit16 of addr.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 8);
+    b1 = (uint8_t) (addr >> 8); // High byte.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) addr;
+    b1 = (uint8_t) addr; // Low byte.
     b2 = spi0_exchange(b1);
     b1 = 0;
     for (uint8_t i=0; i < n; i++) {
@@ -182,18 +181,25 @@ void spi0_fetch_bytes(uint8_t bytes[], uint8_t n, uint32_t addr)
 {
     uint8_t b1, b2;
     if (n == 0) return; // Nothing to do.
-    PORTA.OUTCLR |= PIN7_bm;
+    // We select which SRAM chip using bit17 of the provided address.
+    if (addr & 0x00020000UL) {
+        // Select second chip for 128k <= addr < 256k
+        PORTA.OUTCLR |= PIN2_bm;
+    } else {
+        // Select first chip for 0k <= addr < 128k
+        PORTA.OUTCLR |= PIN7_bm;
+    }
     b1 = 0b11; // Read command.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 16);
+    b1 = (uint8_t) ((addr >> 16) & 0x01); // Upper byte, keep only bit16 of addr.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) (addr >> 8);
+    b1 = (uint8_t) (addr >> 8); // High byte.
     b2 = spi0_exchange(b1);
-    b1 = (uint8_t) addr;
+    b1 = (uint8_t) addr; // Low byte.
     b2 = spi0_exchange(b1);
     b1 = 0;
     for (uint8_t i=0; i < n; i++) {
         bytes[i] = spi0_exchange(b1);
     }   
-    PORTA.OUTSET |= PIN7_bm;    
+    PORTA.OUTSET |= PIN7_bm | PIN2_bm;    
 }

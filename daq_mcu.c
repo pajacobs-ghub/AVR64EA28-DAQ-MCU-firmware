@@ -13,7 +13,7 @@
 // 2024-04-18 Probe for the installed SRAM chips.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.24 AVR64EA28 DAQ-MCU 2025-04-18"
+#define VERSION_STR "v0.25 AVR64EA28 DAQ-MCU 2025-04-18"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -49,8 +49,8 @@ int16_t res[MAXNCHAN];
 // Size of memory depends on the number of 23LC1024 chips present, 
 // each providing 128kB memory. At start-up, we probe the memory chips
 // to see how many are actually present and set the following variables.
-uint32_t size_of_SRAM_in_bytes = 0x0UL;
-uint32_t mask_for_SRAM_addr = 0x0UL;
+uint32_t size_of_SRAM_in_bytes = 0UL;
+uint32_t mask_for_SRAM_addr = 0UL;
 
 uint32_t next_byte_addr_in_SRAM;
 uint8_t byte_addr_has_wrapped_around;
@@ -249,14 +249,11 @@ void iopins_init(void)
     PORTA.DIRCLR = PIN1_bm; // 0.RX
     //
     // SPI connection to external SRAM chip
-    PORTA.DIRSET = PIN7_bm; // Set PA7 to output for SPI CS_A#
-    PORTA.OUTSET = PIN7_bm; // CS_A# high
+    PORTA.DIRSET = PIN7_bm | PIN2_bm; // Set PA7,PA2 output for SPI CS_A#, CS_B#
+    PORTA.OUTSET = PIN7_bm | PIN2_bm; // CS_A# and CS_B# high
     PORTA.DIRSET = PIN4_bm; // 0.MOSI
     PORTA.DIRSET = PIN6_bm; // 0.SCK
     PORTA.DIRCLR = PIN5_bm; // 0.MISO
-    // Reserve PA2 for CS_B#.
-    PORTA.DIRSET = PIN2_bm;
-    PORTA.OUTSET = PIN2_bm;
     //
     // Use PF0 to indicate ready/busy#.
     release_busy_pin();
@@ -785,8 +782,11 @@ void interpret_command()
             // starting at the specified byte address.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
-                // Found some nonblank text, assume address.
-                uint32_t addr = (uint32_t) atol(token_ptr);
+                // Found some nonblank text, assume address as a decimal number.
+                // Had been using atol() here but the manual says that it is 
+                // effectively (int)strtol(s,0,10)
+                char *final;
+                uint32_t addr = (uint32_t) strtol(token_ptr, &final, 10);
                 nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", mem_dump_to_str(addr));
             } else {
                 nchar = snprintf(str_buf, NSTRBUF, "fail: No address given.\n");
