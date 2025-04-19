@@ -10,10 +10,11 @@
 // 2024-03-29 Less chatty mode for interfacing with PIC18 COMMS-MCU.
 //            Changed to using new-line character at end of output messages.
 // 2024-08-13 Allow burst-mode sampling to reduce noise in measurements.
-// 2024-04-18 Probe for the installed SRAM chips.
+// 2025-04-18 Probe for the installed SRAM chips.
+// 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.25 AVR64EA28 DAQ-MCU 2025-04-18"
+#define VERSION_STR "v0.26 AVR64EA28 DAQ-MCU 2025-04-19"
 
 #include "global_defs.h"
 #include <xc.h>
