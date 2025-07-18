@@ -12,9 +12,10 @@
 // 2024-08-13 Allow burst-mode sampling to reduce noise in measurements.
 // 2025-04-18 Probe for the installed SRAM chips.
 // 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
+// 2025-07-18 Allow single-sided conversion as an option.  Default is differential.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.26 AVR64EA28 DAQ-MCU 2025-04-19"
+#define VERSION_STR "v0.27 AVR64EA28 DAQ-MCU 2025-07-18"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -137,7 +138,7 @@ const uint8_t muxneg_pin[] = {
 };
 
 // Parameters controlling the device are stored in virtual config registers.
-#define NUMREG 35
+#define NUMREG 36
 int16_t vregister[NUMREG]; // working copy in SRAM
 
 const char hint[NUMREG][12] = {
@@ -175,7 +176,8 @@ const char hint[NUMREG][12] = {
     "CH10-",     // 31
     "CH11+",     // 32
     "CH11-",     // 33
-    "NBURST"     // 34
+    "NBURST",    // 34
+    "DIFF_CONV"  // 35
 };
 
 void set_registers_to_original_values()
@@ -223,6 +225,7 @@ void set_registers_to_original_values()
     vregister[32] = muxpos_pin[11]; // CH11+ = PD7 by default
     vregister[33] = muxneg_pin[12]; // CH11- = GND by default
     vregister[34] = ADC_SAMPNUM_NONE_gc; // Single-sample conversion
+    vregister[35] = 1; // 1=differential conversion; 0=single-sided
 }
 
 
@@ -421,15 +424,23 @@ void sample_channels(void)
     //
     release_event_pin();
     adc0_init();
-    // Default to single sample for each conversion.
-    uint8_t adc_cmd = ADC_DIFF_bm | ADC_MODE_SINGLE_12BIT_gc | ADC_START_IMMEDIATE_gc;
+    // Build up the ADC command-register byte from our options.
+    uint8_t adc_cmd = 0;
+    adc_cmd |= ADC_START_IMMEDIATE_gc;
     if ((uint8_t)vregister[34] > 0) {
         // Burst-mode sampling with scaling, such that we have to only pick up
         // a 16-bit result.  The results are an accumulation of the sample values
         // and will be scaled such that they are 16 times larger than the raw
         // 12-bit sample, even if fewer than 16 samples were accumulated.
         // See Table 31-3 in the data sheet.
-        adc_cmd = ADC_DIFF_bm | ADC_MODE_BURST_SCALING_gc | ADC_START_IMMEDIATE_gc;
+        adc_cmd |= ADC_MODE_BURST_SCALING_gc;
+    } else {
+        // Default to single sample for each conversion.
+        adc_cmd |= ADC_MODE_SINGLE_12BIT_gc;
+    }
+    if ((uint8_t)vregister[35]) {
+        // Differential conversion.
+        adc_cmd |= ADC_DIFF_bm;
     }
     next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
     byte_addr_has_wrapped_around = 0;
