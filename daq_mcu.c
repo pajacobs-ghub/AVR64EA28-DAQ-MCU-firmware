@@ -13,9 +13,10 @@
 // 2025-04-18 Probe for the installed SRAM chips.
 // 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
 // 2025-07-18 Allow single-sided conversion as an option.  Default is differential.
+// 2026-10-01 Add command 'A' to report byte address of next sample to store.
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.27 AVR64EA28 DAQ-MCU 2025-07-18"
+#define VERSION_STR "v0.28 AVR64EA28 DAQ-MCU 2026-10-01"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -771,6 +772,11 @@ void interpret_command()
             // Report the byte-address in SRAM of the oldest sample set.
             uint32_t addr = oldest_byte_addr_in_SRAM();
             nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", addr);
+            usart0_putstr(str_buf); }
+            break;
+        case 'A': {
+            // Report the byte-address in SRAM of the next sample set to store.
+            nchar = snprintf(str_buf, NSTRBUF, "%lu ok\n", next_byte_addr_in_SRAM);
             usart0_putstr(str_buf); }
             break;
         case 'b': {
