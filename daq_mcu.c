@@ -14,10 +14,11 @@
 // 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
 // 2025-07-18 Allow single-sided conversion as an option.  Default is differential.
 // 2026-10-01 Add command 'A' to report byte address of next sample to store.
-// 2026-11-19 Implement command 'B' to report sample set as a packed hex string. 
+// 2026-11-19 Implement command 'B' to report sample set as a packed hex string.
+//            Use symbols/names for virtual register indices.
 
-// This version string will be reported by the version command.
-#define VERSION_STR "v0.29 AVR64EA28 DAQ-MCU 2026-11-19"
+// This version string will be reported by the 'v' command.
+#define VERSION_STR "v0.30 AVR64EA28 DAQ-MCU 2026-11-19"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -144,6 +145,43 @@ const uint8_t muxneg_pin[] = {
 #define NUMREG 36
 int16_t vregister[NUMREG]; // working copy in SRAM
 
+#define PER_TICKS 0
+#define NCHANNELS 1
+#define NSAMPLES  2
+#define TRIG_MODE 3
+#define TRIG_CHAN 4
+#define TRIG_LEVEL 5
+#define TRIG_SLOPE 6
+#define PGA_FLAG 7
+#define PGA_GAIN 8
+#define V_REF 9
+#define CH0_P 10
+#define CH0_N 11
+#define CH1_P 12
+#define CH1_N 13
+#define CH2_P 14
+#define CH2_N 15
+#define CH3_P 16
+#define CH3_N 17
+#define CH4_P 18
+#define CH4_N 19
+#define CH5_P 20
+#define CH5_N 21
+#define CH6_P 22
+#define CH6_N 23
+#define CH7_P 24
+#define CH7_N 25
+#define CH8_P 26
+#define CH8_N 27
+#define CH9_P 28
+#define CH9_N 29
+#define CH10_P 30
+#define CH10_N 31
+#define CH11_P 32
+#define CH11_N 33
+#define NBURST 34
+#define DIFF_CONV 35
+
 const char hint[NUMREG][12] = {
     "PER_TICKS", // 0
     "NCHANNELS", // 1
@@ -185,50 +223,50 @@ const char hint[NUMREG][12] = {
 
 void set_registers_to_original_values()
 {
-    vregister[0] = 1250; // sample period in timer ticks
-    vregister[1] = 6;    // number of channels to sample
-    vregister[2] = 128;  // number of samples in record after trigger event
-    vregister[3] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
-    vregister[4] = 0;    // trigger channel for internal trigger
-    vregister[5] = 100;  // trigger level as an 11-bit count, 0-2048
-    vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
-    vregister[7] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
-    vregister[8] = 0;    // PGA gain 0=1X,1=2X,2=4X,3=8X,4=16X
-    vregister[9] = 0;    // V_REF 0=1.024V,1=2.048V,3=4.096V
+    vregister[PER_TICKS] = 1250; // sample period in timer ticks
+    vregister[NCHANNELS] = 6;    // number of channels to sample
+    vregister[NSAMPLES]  = 128;  // number of samples in record after trigger event
+    vregister[TRIG_MODE] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
+    vregister[TRIG_CHAN] = 0;    // trigger channel for internal trigger
+    vregister[TRIG_LEVEL] = 100;  // trigger level as an 11-bit count, 0-2048
+    vregister[TRIG_SLOPE] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
+    vregister[PGA_FLAG] = 0;    // PGA flag for all channels, 0=direct 1=via_PGA
+    vregister[PGA_GAIN] = 0;    // PGA gain 0=1X,1=2X,2=4X,3=8X,4=16X
+    vregister[V_REF] = 0;    // V_REF 0=1.024V,1=2.048V,3=4.096V
     // The first 6 channels (0 through 5) default to differential inputs,
     // spread across the full set of 12 analog pins.
     // This is expected to be the usual arrangement.
-    vregister[10] = muxpos_pin[0];  // CH0+ = PC0 by default
-    vregister[11] = muxneg_pin[1];  // CH0- = PC1 by default
-    vregister[12] = muxpos_pin[2];  // CH1+ = PC2 by default
-    vregister[13] = muxneg_pin[3];  // CH1- = PC3 by default
-    vregister[14] = muxpos_pin[4];  // CH2+ = PD0 by default
-    vregister[15] = muxneg_pin[5];  // CH2- = PD1 by default
-    vregister[16] = muxpos_pin[6];  // CH3+ = PD2 by default
-    vregister[17] = muxneg_pin[7];  // CH3- = PD3 by default
-    vregister[18] = muxpos_pin[8];  // CH4+ = PD4 by default
-    vregister[19] = muxneg_pin[9];  // CH4- = PD5 by default
-    vregister[20] = muxpos_pin[10]; // CH5+ = PD6 by default
-    vregister[21] = muxneg_pin[11]; // CH5- = PD7 by default
+    vregister[CH0_P] = muxpos_pin[0];  // CH0+ = PC0 by default
+    vregister[CH0_N] = muxneg_pin[1];  // CH0- = PC1 by default
+    vregister[CH1_P] = muxpos_pin[2];  // CH1+ = PC2 by default
+    vregister[CH1_N] = muxneg_pin[3];  // CH1- = PC3 by default
+    vregister[CH2_P] = muxpos_pin[4];  // CH2+ = PD0 by default
+    vregister[CH2_N] = muxneg_pin[5];  // CH2- = PD1 by default
+    vregister[CH3_P] = muxpos_pin[6];  // CH3+ = PD2 by default
+    vregister[CH3_N] = muxneg_pin[7];  // CH3- = PD3 by default
+    vregister[CH4_P] = muxpos_pin[8];  // CH4+ = PD4 by default
+    vregister[CH4_N] = muxneg_pin[9];  // CH4- = PD5 by default
+    vregister[CH5_P] = muxpos_pin[10]; // CH5+ = PD6 by default
+    vregister[CH5_N] = muxneg_pin[11]; // CH5- = PD7 by default
     // The second set of 6 channels default to single-ended inputs
     // across the later set of 6 analog pins.
     // If we happen to want to record 12 single-ended channels,
     // we need change only the selections for channels 0 through 5
     // because channels 6 through 100 are ready to be used.
-    vregister[22] = muxpos_pin[6];  // CH6+ = PD2 by default
-    vregister[23] = muxneg_pin[12]; // CH6- = GND by default
-    vregister[24] = muxpos_pin[7];  // CH7+ = PD3 by default
-    vregister[25] = muxneg_pin[12]; // CH7- = GND by default
-    vregister[26] = muxpos_pin[8];  // CH8+ = PD4 by default
-    vregister[27] = muxneg_pin[12]; // CH8- = GND by default
-    vregister[28] = muxpos_pin[9];  // CH9+ = PD5 by default
-    vregister[29] = muxneg_pin[12]; // CH9- = GND by default
-    vregister[30] = muxpos_pin[10]; // CH10+ = PD6 by default
-    vregister[31] = muxneg_pin[12]; // CH10- = GND by default
-    vregister[32] = muxpos_pin[11]; // CH11+ = PD7 by default
-    vregister[33] = muxneg_pin[12]; // CH11- = GND by default
-    vregister[34] = ADC_SAMPNUM_NONE_gc; // Single-sample conversion
-    vregister[35] = 1; // 1=differential conversion; 0=single-sided
+    vregister[CH6_P] = muxpos_pin[6];  // CH6+ = PD2 by default
+    vregister[CH6_N] = muxneg_pin[12]; // CH6- = GND by default
+    vregister[CH7_P] = muxpos_pin[7];  // CH7+ = PD3 by default
+    vregister[CH7_N] = muxneg_pin[12]; // CH7- = GND by default
+    vregister[CH8_P] = muxpos_pin[8];  // CH8+ = PD4 by default
+    vregister[CH8_N] = muxneg_pin[12]; // CH8- = GND by default
+    vregister[CH9_P] = muxpos_pin[9];  // CH9+ = PD5 by default
+    vregister[CH9_N] = muxneg_pin[12]; // CH9- = GND by default
+    vregister[CH10_P] = muxpos_pin[10]; // CH10+ = PD6 by default
+    vregister[CH10_N] = muxneg_pin[12]; // CH10- = GND by default
+    vregister[CH11_P] = muxpos_pin[11]; // CH11+ = PD7 by default
+    vregister[CH11_N] = muxneg_pin[12]; // CH11- = GND by default
+    vregister[NBURST] = ADC_SAMPNUM_NONE_gc; // Single-sample conversion
+    vregister[DIFF_CONV] = 1; // 1=differential conversion; 0=single-sided
 }
 
 
@@ -295,7 +333,7 @@ void adc0_init(void)
     // subsequent conversions quickly.
     ADC0.CTRLA |= ADC_LOWLAT_bm | ADC_ENABLE_bm;
     ADC0.CTRLB = ADC_PRESC_DIV4_gc; // ADC clock frequency 5MHz
-    switch (vregister[9]) {
+    switch (vregister[V_REF]) {
         case 0:
             ADC0.CTRLC = ADC_REFSEL_VDD_gc;
             break;
@@ -317,7 +355,7 @@ void adc0_init(void)
     ADC0.CTRLE = 20; // SAMPDUR of 4 microseconds
     //
     // The number of samples converted in burst mode is 2^^sampnum.
-    uint8_t sampnum = (uint8_t)vregister[34];
+    uint8_t sampnum = (uint8_t)vregister[NBURST];
     if (sampnum > 0x0A) sampnum = 0x0A;
     if (sampnum == 0) {
         ADC0.CTRLF = ADC_SAMPNUM_NONE_gc;
@@ -326,7 +364,7 @@ void adc0_init(void)
     }
     //
     uint8_t gain_gc = ADC_GAIN_1X_gc;
-    switch (vregister[8]) {
+    switch (vregister[PGA_GAIN]) {
         case 0:
             gain_gc = ADC_GAIN_1X_gc;
             break;
@@ -380,7 +418,7 @@ uint8_t byte_addr_increment(uint8_t n_chan)
 
 uint32_t max_n_samples(void)
 {
-    uint8_t n_chan = (uint8_t)vregister[1];
+    uint8_t n_chan = (uint8_t)vregister[NCHANNELS];
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     return size_of_SRAM_in_bytes / byte_addr_incr;
 }
@@ -402,27 +440,27 @@ void sample_channels(void)
 //
 {
     // Get configuration data from virtual registers.
-    uint16_t ticks = (uint16_t)vregister[0];
-    uint8_t n_chan = (uint8_t)vregister[1];
-    uint8_t mode = (uint8_t)vregister[3];
+    uint16_t ticks = (uint16_t)vregister[PER_TICKS];
+    uint8_t n_chan = (uint8_t)vregister[NCHANNELS];
+    uint8_t mode = (uint8_t)vregister[TRIG_MODE];
 # define TRIGGER_IMMEDIATE 0
 # define TRIGGER_INTERNAL 1
 # define TRIGGER_EXTERNAL 2
-    uint8_t trigger_chan = (uint8_t)vregister[4];
-    int16_t trigger_level = vregister[5];
-    uint8_t trigger_slope = (uint8_t)vregister[6];
+    uint8_t trigger_chan = (uint8_t)vregister[TRIG_CHAN];
+    int16_t trigger_level = vregister[TRIG_LEVEL];
+    uint8_t trigger_slope = (uint8_t)vregister[TRIG_SLOPE];
     //
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
     uint8_t via_bits;
-    if (vregister[7]) {
+    if (vregister[PGA_FLAG]) {
         via_bits = ADC_VIA_PGA_gc;
     } else {
         via_bits = ADC_VIA_DIRECT_gc;
     }
     uint8_t muxpos_bits[MAXNCHAN], muxneg_bits[MAXNCHAN];
     for (uint8_t ch=0; ch < n_chan; ch++) {
-        muxpos_bits[ch] = via_bits | (uint8_t)vregister[10+2*ch];
-        muxneg_bits[ch] = via_bits | (uint8_t)vregister[11+2*ch];
+        muxpos_bits[ch] = via_bits | (uint8_t)vregister[CH0_P + 2*ch];
+        muxneg_bits[ch] = via_bits | (uint8_t)vregister[CH0_N + 2*ch];
     }
     //
     release_event_pin();
@@ -430,7 +468,7 @@ void sample_channels(void)
     // Build up the ADC command-register byte from our options.
     uint8_t adc_cmd = 0;
     adc_cmd |= ADC_START_IMMEDIATE_gc;
-    if ((uint8_t)vregister[34] > 0) {
+    if ((uint8_t)vregister[NBURST] > 0) {
         // Burst-mode sampling with scaling, such that we have to only pick up
         // a 16-bit result.  The results are an accumulation of the sample values
         // and will be scaled such that they are 16 times larger than the raw
@@ -441,14 +479,14 @@ void sample_channels(void)
         // Default to single sample for each conversion.
         adc_cmd |= ADC_MODE_SINGLE_12BIT_gc;
     }
-    if ((uint8_t)vregister[35]) {
+    if ((uint8_t)vregister[DIFF_CONV]) {
         // Differential conversion.
         adc_cmd |= ADC_DIFF_bm;
     }
     next_byte_addr_in_SRAM = 0; // Start afresh, at address 0.
     byte_addr_has_wrapped_around = 0;
     uint8_t post_event = 0;
-    uint16_t samples_remaining = (uint16_t)vregister[2];
+    uint16_t samples_remaining = (uint16_t)vregister[NSAMPLES];
     did_not_keep_up_during_sampling = 0; // Presume that we will be fast enough.
     timerA0_init(ticks); // period=ticks*0.8us
     timerA0_wait();
@@ -521,19 +559,19 @@ void sample_channels(void)
 void sample_channels_once()
 {
     // We temporarily override some of the registers to make this happen.
-    uint16_t ticks_save = (uint16_t)vregister[0];
-    uint8_t mode_save = (uint8_t)vregister[3];
-    uint16_t samples_remaining_save = (uint16_t)vregister[2];
+    uint16_t ticks_save = (uint16_t)vregister[PER_TICKS];
+    uint8_t mode_save = (uint8_t)vregister[TRIG_MODE];
+    uint16_t samples_remaining_save = (uint16_t)vregister[NSAMPLES];
     //
-    vregister[0] = (uint16_t)200; // Time enough to do a full scan.
-    vregister[3] = 0; // Immediate mode.
-    vregister[2] = 1; // One sample set.
+    vregister[PER_TICKS] = (uint16_t)200; // Time enough to do a full scan.
+    vregister[TRIG_MODE] = TRIGGER_IMMEDIATE;
+    vregister[NSAMPLES] = 1; // One sample set.
     sample_channels();
     //
     // Restore register values.
-    vregister[0] = ticks_save;
-    vregister[3] = mode_save;
-    vregister[2] = samples_remaining_save;
+    vregister[PER_TICKS] = ticks_save;
+    vregister[TRIG_MODE] = mode_save;
+    vregister[NSAMPLES] = samples_remaining_save;
     return;
 }
 
@@ -550,7 +588,7 @@ uint32_t oldest_byte_addr_in_SRAM()
 char* sample_set_to_str(uint32_t n, uint8_t packed)
 {
     int nchar;
-    uint8_t n_chan = (uint8_t)vregister[1];
+    uint8_t n_chan = (uint8_t)vregister[NCHANNELS];
     // Start with address of oldest sample, then move to selected sample.
     uint32_t addr = oldest_byte_addr_in_SRAM();
     uint8_t byte_addr_incr = byte_addr_increment(n_chan);
@@ -580,6 +618,7 @@ char* sample_set_to_str(uint32_t n, uint8_t packed)
             strncat(str_buf1, str_buf2, NSTRBUF2);
         }
     }
+    (void)nchar; // unused
     return str_buf1;
 }
 
@@ -597,6 +636,7 @@ char* mem_dump_to_str(uint32_t addr)
         nchar = snprintf(str_buf2, NSTRBUF2, "%02x", bytes[i]);
         strncat(str_buf1, str_buf2, NSTRBUF2);
     }
+    (void)nchar; // unused
     return str_buf1;
 }
 
@@ -604,13 +644,14 @@ void report_values(void)
 // Report the previously-collected data to the UART.
 // Assume a simple sampling process with immediate event.
 {
-    uint8_t mode = (uint8_t)vregister[3];
-    uint32_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint32_t)vregister[2] : max_n_samples();
+    uint8_t mode = (uint8_t)vregister[TRIG_MODE];
+    uint32_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint32_t)vregister[NSAMPLES] : max_n_samples();
     int nchar;
     for (uint32_t i = 0; i < n_sample; i++) {
         nchar = snprintf(str_buf, NSTRBUF, "i=%6lu data=%s\n", i, sample_set_to_str(i, 0));
         usart0_putstr(str_buf);
     }
+    (void)nchar; // unused
 } // end void report_values()
 
 
@@ -813,7 +854,7 @@ void interpret_command()
             break;
         case 'b': {
             // Report the number of bytes in SRAM for each sample set.
-            uint16_t bincr = byte_addr_increment((uint8_t)vregister[1]);
+            uint16_t bincr = byte_addr_increment((uint8_t)vregister[NCHANNELS]);
             nchar = snprintf(str_buf, NSTRBUF, "%u ok\n", bincr);
             usart0_putstr(str_buf); }
             break;
@@ -835,7 +876,7 @@ void interpret_command()
                 // Found some nonblank text, assume address as a decimal number.
                 // Had been using atol() here but the manual says that it is 
                 // effectively (int)strtol(s,0,10)
-                char *final;
+                const char *final;
                 uint32_t addr = (uint32_t) strtol(token_ptr, &final, 10);
                 nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", mem_dump_to_str(addr));
             } else {
@@ -919,6 +960,7 @@ void interpret_command()
         default:
             nchar = snprintf(str_buf, NSTRBUF, "fail: Unknown command.\n"); usart0_putstr(str_buf);
     } // end switch
+    (void)nchar; // unused
 } // end interpret_command())
 
 
@@ -945,7 +987,15 @@ int main(void)
         size_of_SRAM_in_bytes = 0x0UL;
         mask_for_SRAM_addr = 0x0UL;
     }
+    // We try to restore the virtual register values from EEPROM but,
+    // for a freshly-programmed microcontroller, there will not be valid data.
+    // We use TRIG_MODE as the "canary in the coal mine".
     restore_registers_from_EEPROM();
+    uint8_t tm = (uint8_t)vregister[TRIG_MODE];
+    if (!(tm == TRIGGER_IMMEDIATE || tm == TRIGGER_INTERNAL || tm == TRIGGER_EXTERNAL)) {
+        // Suspect that the virtual registers do not have valid data.
+        set_registers_to_original_values();
+    }
     // Flash the Green LED twice to signal that the MCU is ready.
     for (int8_t i=0; i < 2; ++i) {
         sampling_LED_ON();
@@ -966,5 +1016,6 @@ int main(void)
     } // never-ending while
     spi0_close();
     usart0_close();
+    (void)nchar; // unused
     return 0;
 }
