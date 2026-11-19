@@ -14,9 +14,10 @@
 // 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
 // 2025-07-18 Allow single-sided conversion as an option.  Default is differential.
 // 2026-10-01 Add command 'A' to report byte address of next sample to store.
+// 2026-11-19 Implement command 'B' to report sample set as a packed hex string. 
 
 // This version string will be reported by the version command.
-#define VERSION_STR "v0.28 AVR64EA28 DAQ-MCU 2026-10-01"
+#define VERSION_STR "v0.29 AVR64EA28 DAQ-MCU 2026-11-19"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -30,6 +31,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "crc16.h"
 
 #pragma config PERIOD = PERIOD_OFF, WINDOW = WINDOW_OFF
 #pragma config SLEEP = SLEEP_DISABLE, ACTIVE = ACTIVE_DISABLE, SAMPFREQ = SAMPFREQ_128HZ, LVL = LVL_BODLEVEL0
@@ -545,7 +547,7 @@ uint32_t oldest_byte_addr_in_SRAM()
     return (byte_addr_has_wrapped_around) ? next_byte_addr_in_SRAM : 0;
 }
 
-char* sample_set_to_str(uint32_t n)
+char* sample_set_to_str(uint32_t n, uint8_t packed)
 {
     int nchar;
     uint8_t n_chan = (uint8_t)vregister[1];
@@ -557,10 +559,26 @@ char* sample_set_to_str(uint32_t n)
     // a bit mask can be used for the valid address bits.
     addr &= mask_for_SRAM_addr;
     spi0_fetch_sample_data(res, n_chan, addr);
-    nchar = snprintf(str_buf1, NSTRBUF1, "%d", res[0]);
-    for (uint8_t i=1; i < n_chan; i++) {
-        nchar = snprintf(str_buf2, NSTRBUF2, " %d", res[i]);
+    if (packed) {
+        // Assemble the string in hexadecimal, big-endian byte layout.
+        // The results are int16_t, so just render all of the bits as
+        // 4 hexadecimal characters.  This includes the sign bit.
+        nchar = snprintf(str_buf1, NSTRBUF1, "%04x", (uint16_t)res[0]);
+        for (uint8_t i=1; i < n_chan; i++) {
+            nchar = snprintf(str_buf2, NSTRBUF2, "%04x", (uint16_t)res[i]);
+            strncat(str_buf1, str_buf2, NSTRBUF2);
+        }
+        // Append the CRC16 for the characters that are in the buffer.
+        uint16_t crc = crc16b((uint8_t *)str_buf1, 4*n_chan, 0xffff);
+        snprintf(str_buf2, NSTRBUF2, " %04x", crc);
         strncat(str_buf1, str_buf2, NSTRBUF2);
+    } else {
+        // Assemble the string with decimal numbers separated by spaces.
+        nchar = snprintf(str_buf1, NSTRBUF1, "%d", res[0]);
+        for (uint8_t i=1; i < n_chan; i++) {
+            nchar = snprintf(str_buf2, NSTRBUF2, " %d", res[i]);
+            strncat(str_buf1, str_buf2, NSTRBUF2);
+        }
     }
     return str_buf1;
 }
@@ -590,7 +608,7 @@ void report_values(void)
     uint32_t n_sample = (mode == TRIGGER_IMMEDIATE) ? (uint32_t)vregister[2] : max_n_samples();
     int nchar;
     for (uint32_t i = 0; i < n_sample; i++) {
-        nchar = snprintf(str_buf, NSTRBUF, "i=%6lu data=%s\n", i, sample_set_to_str(i));
+        nchar = snprintf(str_buf, NSTRBUF, "i=%6lu data=%s\n", i, sample_set_to_str(i, 0));
         usart0_putstr(str_buf);
     }
 } // end void report_values()
@@ -752,7 +770,7 @@ void interpret_command()
         case 'I':
             // Immediately take a single sample set and report values.
             sample_channels_once();
-            nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(0));
+            nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(0, 0));
             usart0_putstr(str_buf);
             break;
         case 'P':
@@ -762,7 +780,21 @@ void interpret_command()
             if (token_ptr) {
                 // Found some nonblank text, assume sample index.
                 uint32_t ii = (uint32_t) atol(token_ptr);
-                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(ii));
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(ii, 0));
+            } else {
+                nchar = snprintf(str_buf, NSTRBUF, "fail: No index given.\n");
+            }
+            usart0_putstr(str_buf);
+            break;
+        case 'B':
+            // Report the selected sample set for the configured channels.
+            // An index of 0 refers to the oldest sample set.
+            // The format is a packed hexadecimal string followed by a 16-bit CRC in hexadecimal.
+            token_ptr = strtok(&cmd_buf[1], sep_tok);
+            if (token_ptr) {
+                // Found some nonblank text, assume sample index.
+                uint32_t ii = (uint32_t) atol(token_ptr);
+                nchar = snprintf(str_buf, NSTRBUF, "%s ok\n", sample_set_to_str(ii, 1));
             } else {
                 nchar = snprintf(str_buf, NSTRBUF, "fail: No index given.\n");
             }
@@ -849,7 +881,8 @@ void interpret_command()
             nchar = snprintf(str_buf, NSTRBUF, " G      go and start sampling, and then report\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " k      report flag did_not_keep_up_during_sampling\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " I      sample channels once and report\n"); usart0_putstr(str_buf);
-            nchar = snprintf(str_buf, NSTRBUF, " P <i>  report sample set i (i=0 for oldest data)\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " P <i>  report sample set i as decimal (i=0 for oldest data)\n"); usart0_putstr(str_buf);
+            nchar = snprintf(str_buf, NSTRBUF, " B <i>  report sample set i as hexadecimal (i=0 for oldest data)\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " M <i>  dump SRAM memory from byte address i\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " a      report byte address of oldest data\n"); usart0_putstr(str_buf);
             nchar = snprintf(str_buf, NSTRBUF, " b      report size of a sample set in bytes\n"); usart0_putstr(str_buf);
