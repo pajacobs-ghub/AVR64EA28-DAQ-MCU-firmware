@@ -14,11 +14,11 @@
 // 2025-04-19 Use the xxxSet and xxxCLR registers more carefully in the SPI code.
 // 2025-07-18 Allow single-sided conversion as an option.  Default is differential.
 // 2026-10-01 Add command 'A' to report byte address of next sample to store.
-// 2026-11-19 Implement command 'B' to report sample set as a packed hex string.
+// 2026-11-19 Implement command 'B' to report sample set as a packed base64 string.
 //            Use symbols/names for virtual register indices.
 
 // This version string will be reported by the 'v' command.
-#define VERSION_STR "v0.30 AVR64EA28 DAQ-MCU 2026-11-19"
+#define VERSION_STR "v0.31 AVR64EA28 DAQ-MCU 2026-11-20"
 
 #include "global_defs.h"
 #include <xc.h>
@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "crc16.h"
+#include "base64.h"
 
 #pragma config PERIOD = PERIOD_OFF, WINDOW = WINDOW_OFF
 #pragma config SLEEP = SLEEP_DISABLE, ACTIVE = ACTIVE_DISABLE, SAMPFREQ = SAMPFREQ_128HZ, LVL = LVL_BODLEVEL0
@@ -51,6 +52,7 @@ char cmd_buf[NCMDBUF];
 
 #define MAXNCHAN 12
 int16_t res[MAXNCHAN];
+uint8_t res_bytes[MAXNCHAN*2];
 
 // Size of memory depends on the number of 23LC1024 chips present, 
 // each providing 128kB memory. At start-up, we probe the memory chips
@@ -596,22 +598,18 @@ char* sample_set_to_str(uint32_t n, uint8_t packed)
     // Assume that the size of SRAM is a power of two, so that
     // a bit mask can be used for the valid address bits.
     addr &= mask_for_SRAM_addr;
-    spi0_fetch_sample_data(res, n_chan, addr);
     if (packed) {
-        // Assemble the string in hexadecimal, big-endian byte layout.
-        // The results are int16_t, so just render all of the bits as
-        // 4 hexadecimal characters.  This includes the sign bit.
-        nchar = snprintf(str_buf1, NSTRBUF1, "%04x", (uint16_t)res[0]);
-        for (uint8_t i=1; i < n_chan; i++) {
-            nchar = snprintf(str_buf2, NSTRBUF2, "%04x", (uint16_t)res[i]);
-            strncat(str_buf1, str_buf2, NSTRBUF2);
-        }
+        // Assemble the string in base64, big-endian byte layout,
+        // which also happens to be the layout in the SPI SRAM.
+        spi0_fetch_bytes(res_bytes, n_chan*2, addr);
+        nchar = bytes_to_base64(res_bytes, n_chan*2, str_buf1, NSTRBUF1);
         // Append the CRC16 for the characters that are in the buffer.
-        uint16_t crc = crc16b((uint8_t *)str_buf1, 4*n_chan, 0xffff);
+        uint16_t crc = crc16b((uint8_t *)str_buf1, nchar, 0xffff);
         snprintf(str_buf2, NSTRBUF2, " %04x", crc);
         strncat(str_buf1, str_buf2, NSTRBUF2);
     } else {
         // Assemble the string with decimal numbers separated by spaces.
+        spi0_fetch_sample_data(res, n_chan, addr);
         nchar = snprintf(str_buf1, NSTRBUF1, "%d", res[0]);
         for (uint8_t i=1; i < n_chan; i++) {
             nchar = snprintf(str_buf2, NSTRBUF2, " %d", res[i]);
@@ -830,7 +828,7 @@ void interpret_command()
         case 'B':
             // Report the selected sample set for the configured channels.
             // An index of 0 refers to the oldest sample set.
-            // The format is a packed hexadecimal string followed by a 16-bit CRC in hexadecimal.
+            // The format is a packed base64 string followed by a 16-bit CRC in hexadecimal.
             token_ptr = strtok(&cmd_buf[1], sep_tok);
             if (token_ptr) {
                 // Found some nonblank text, assume sample index.
